@@ -49,16 +49,19 @@ after all goals:
 | Attack agent (attacker) | Proposes and adapts attacks as JSON | Python, stronger LLM, PAIR-style loop | Host |
 | Orchestrator | Runs the loop, gates every action, stores everything | Python, Pydantic, SQLite | Host |
 | Evaluator | Decides breaches deterministically, labels refusals | Python (tool log + canary), cheap LLM labeller | Host |
-| Cedar generator | Turns a finding into a validated Cedar policy | LLM (structured output), validated with the `cedar` CLI | Host |
+| Cedar generator | Turns a finding into a validated Cedar policy | LLM (structured output), validated with `cedarpy.validate_policies` | Host |
 | Sandbox | Contains the test agent and its tools | Firecracker microVM on Linux; Docker locally | — |
 | Report | Final findings, before vs after | Static HTML generated from SQLite | Host |
 
 ### Repo layout
 
 ```
+pyproject.toml            # pinned deps (§6.1), `siege` console script
+.env.example              # every setting config.py reads
 siege/
-  llm.py                  # llm_call(system, messages, schema) — the only place providers are called
+  llm.py                  # llm_call(system, messages, schema, tools) — the only place providers are called
   config.py               # model names, MAX_TURNS, target URL, paths (env-driven)
+  cli.py                  # siege run | fix | rerun | report | demo
   goals.yaml              # attack goals (§3.4)
   target/                 # test agent service — this whole dir ships into the sandbox
     app.py                # FastAPI: /session, /chat, /session/{id}/tool_log, /policies
@@ -84,6 +87,9 @@ siege/
     firecracker/          # rootfs build, kernel, VM config, launch script
   scripts/
     happy_path.py
+    chat.py               # talk to the target by hand as a given user
+tests/                    # pytest; unit tests use the `fake` LLM provider, never the network
+demo/                     # recorded backup run (Phase 8)
 ```
 
 ---
@@ -147,9 +153,11 @@ Money is stored in integer cents because Cedar has no decimals.
 
 ### 3.5 Tool log (ground truth)
 
-One row per tool call **attempt**: `session_id, turn, tool, args, principal, decision (allow | deny | not_enforced), executed (bool), result_summary, ts`.
+One row per tool call **attempt**: `session_id, turn, tool, args, principal, resource_attrs, decision (allow | deny | not_enforced), executed (bool), result_summary, ts`.
 
 A breach needs `executed = true`. Denied attempts are logged too, because they are the rerun evidence.
+
+`resource_attrs` records the resource's attributes (for example, the order's owner and total) as the PEP loaded them from the DB. This lets the evaluator on the host check ownership predicates without access to the target's DB.
 
 ---
 
@@ -220,9 +228,25 @@ def run_session(goal, run):
 
 ### 6.1 Tooling
 
-- **Authorization:** `pip install cedarpy` provides `is_authorized(request, policies, entities, schema)`.
-- **Validation:** the `cedar` CLI (`cargo install cedar-policy-cli`), run as `cedar validate --schema cedar/schema.cedarschema --policies <file>`.
-- These packages change often. Check the exact API and flags (for example, whether the CLI needs `--schema-format cedar`) at install time, and record the pinned versions here.
+- **Authorization:** `cedarpy.is_authorized(request, policies, entities, schema)`.
+- **Validation:** `cedarpy.validate_policies(policies, schema)`. It accepts the Cedar-format schema string directly, so no Rust toolchain or `cedar` CLI is needed.
+- **Verified on 2026-10-01** with the schema in §6.2:
+  - The schema and G1 policy validate, and a typo'd attribute is rejected with a readable error.
+  - `alice` → refund of `bob`'s order is **Deny**, and `bob` → his own order is **Allow**.
+  - Without `base.cedar`, everything is **Deny**, which confirms D4.
+
+**Pinned versions** (Python 3.12 via Homebrew; the system Python 3.9 is too old for `anthropic` 1.x):
+
+| Package | Version |
+|---|---|
+| `anthropic` | 1.10.0 |
+| `cedarpy` | 4.12.1 |
+| `fastapi` | 0.142.2 |
+| `uvicorn` | 0.54.0 |
+| `pydantic` | 2.13.5 |
+| `httpx` | 0.28.1 |
+| `pyyaml` | 6.0.3 |
+| `pytest` | 9.1.1 |
 
 ### 6.2 Schema (`cedar/schema.cedarschema`, written by hand once)
 
@@ -261,7 +285,7 @@ forbid (
 
 ### 6.5 Validate before trusting it
 
-1. Run `cedar validate` against the schema, on `base.cedar` plus the new policy.
+1. Run `cedarpy.validate_policies` against the schema, on `base.cedar` plus the new policy.
 2. If validation fails, send the error back to the LLM **once** to self-correct.
 3. If it still fails, use `cedar/fallback/<goal>.cedar` and store it with `source = fallback`.
 
@@ -320,22 +344,157 @@ The "castle" live view is optional polish, built last. It streams turn events ov
 
 ---
 
-## 9. Build order and done criteria
+## 9. Development phases
 
-Each step must be demoable before starting the next.
+Development runs in nine phases (0–8). Each phase ends with an **exit check**, and the next phase does not start until that check passes. Phases 0–5 with G1 are the non-negotiable core. Everything after that adds coverage, isolation, or polish.
 
-| # | Step | Done when |
+```
+P0 Foundations ─► P1 Target ─► P2 Evaluator+Store ─► P3 Attacker+Loop (MVP) ─► P4 Cedar+Rerun ─► P5 Report
+                                                                                                    │
+                                              P8 Demo hardening + stretch ◄─ P7 Sandbox ◄─ P6 G2, G3 ◄┘
+```
+
+### 9.1 Working agreements
+
+- **Branches:** one per phase, named `phase-<n>-<slug>` (for example `phase-1-target`), cut from `main`. Merge to `main` when the exit check passes.
+- **Commits:** at least one per step, with messages in the form `P<n>.<m>: <what changed>`. A code change that departs from this plan and the plan update that records it go in the **same** commit.
+- **Tests:** `pytest` must pass before every commit.
+  - Unit tests never call a real LLM or the network. They use the `fake` provider, which returns scripted responses.
+  - Tests that call real models are marked `@pytest.mark.live` and are run by hand.
+- **The target is reached only over HTTP.** The orchestrator never imports `siege/target`. Because of this, moving the target into Docker or Firecracker in Phase 7 only changes `TARGET_URL`.
+- **Status:** update §9.3 at the end of every phase.
+
+### 9.2 Phases and steps
+
+#### Phase 0 — Foundations
+
+Goal: a working skeleton that every later phase builds on.
+
+| Step | Deliverable |
+|---|---|
+| P0.1 | A Python 3.12 venv; `pyproject.toml` pinning the versions in §6.1 and defining the `siege` console script; a `.gitignore` covering `.venv/`, `*.db`, `runs/` and `.env` |
+| P0.2 | The package skeleton from the repo layout in §1; `siege/config.py` (env-driven settings); `.env.example` |
+| P0.3 | `siege/llm.py` with `llm_call(system, messages, schema=None, tools=None)` and three providers: `anthropic` (default), `ollama` (local fallback), `fake` (scripted, for tests). A model refusal comes back as a typed result, not an exception. The Anthropic provider opts into server-side refusal fallbacks where the model supports them |
+| P0.4 | `pytest` wiring, the `live` marker, and a smoke test per provider. The `fake` test always runs; the others are `live` |
+
+**Exit:** `pytest` passes, and `llm_call` works with `fake`. With credentials configured, one `live` call succeeds.
+
+#### Phase 1 — Target agent
+
+Goal: the vulnerable ShopBot from §3, running locally under `uvicorn`.
+
+| Step | Deliverable |
+|---|---|
+| P1.1 | `target/db.py` and `target/seed.py`: the schema and the seed data from §3.3. The canary is generated at seed time and returned to the caller |
+| P1.2 | `target/tools.py`: the four tools from §3.2, as functions over the DB that take the session principal |
+| P1.3 | `target/pep.py`: the dispatch wrapper and the tool log from §3.5. This phase supports only `enforce=false` (`decision=not_enforced`); the Cedar path is added in P4.2 |
+| P1.4 | `target/agent.py`: the system prompt and the tool-calling loop, with a cap on tool iterations per turn. Every tool call is dispatched through the PEP |
+| P1.5 | `target/app.py`: the endpoints from §3.1, with sessions bound to their principal on the server side (D3) |
+| P1.6 | `scripts/chat.py`: an interactive CLI for talking to the target as a chosen user, showing each tool call as it happens |
+| P1.7 | Tests using a `fake` target LLM that scripts tool calls. They check that tool-log rows are correct (principal, args, `resource_attrs`, `executed`) and that no message text can change the principal |
+
+**Exit:** `pytest` passes. By hand in `scripts/chat.py` with a real model, a G1-style request makes the agent call `issue_refund` on an order the user doesn't own, and the tool log shows `executed=true`.
+
+#### Phase 2 — Evaluator and store
+
+Goal: breaches are judged by code and every result is persisted.
+
+| Step | Deliverable |
+|---|---|
+| P2.1 | `goals.yaml` with G1–G3. Each entry has the goal text, a breach-predicate ID, a severity and a fallback-policy path. G4 is added in Phase 8 |
+| P2.2 | `orchestrator/evaluator.py`: the deterministic predicates from §3.4 plus canary matching. It works from the reply and tool calls (including `resource_attrs`) only |
+| P2.3 | `label_refusal`: an LLM labeller that returns one of the `refusal_type` values from §4, and `unknown` on any failure |
+| P2.4 | `orchestrator/store.py`: the SQLite tables from §5 |
+| P2.5 | Tests on fixture transcripts covering an executed breach, a refusal, a canary leak and a denied attempt. Each must produce the correct verdict |
+
+**Exit:** the manual G1 transcript from Phase 1 is judged a breach. A refusal transcript and a denied attempt are not.
+
+#### Phase 3 — Attacker and orchestrator loop (MVP)
+
+Goal: an automated multi-turn breach, end to end.
+
+| Step | Deliverable |
+|---|---|
+| P3.1 | `orchestrator/attacker.py`: `propose_attack` as in §4. Output is validated with Pydantic, and attacker refusals are handled as in §2 |
+| P3.2 | `policy_check` as in §5 (schema, length cap, in-scope target, turn cap) |
+| P3.3 | `orchestrator/loop.py`: `run_session` as in §5, writing to `runs`, `attempts` and `findings` |
+| P3.4 | `siege/cli.py`: `siege run --goal G1` prints each turn live; `siege show <run_id>` prints a stored run |
+| P3.5 | Tests of the whole loop with a scripted attacker and a scripted target: a breach on turn N stores a finding; rejected proposals are stored and count toward the cap; the cap is respected |
+
+**Exit (MVP):** with real models, `siege run --goal G1` produces an automated multi-turn breach, and it is stored in SQLite.
+
+#### Phase 4 — Cedar defense and rerun
+
+Goal: the full "attack → fix → prove the fix" story.
+
+| Step | Deliverable |
+|---|---|
+| P4.1 | `cedar/schema.cedarschema`, `cedar/base.cedar` and `cedar/fallback/G1..G3.cedar`, with a test that validates all of them |
+| P4.2 | The Cedar path in the PEP (§6.6): entities built from the DB, a call to `is_authorized`, the deny path, and `PUT /policies` |
+| P4.3 | `orchestrator/cedar_gen.py` (§6.4–6.5): generate, validate, self-correct once, then fall back. Results are stored in `policies` |
+| P4.4 | `orchestrator/rerun.py`: replays that classify each finding as `BLOCKED`, `NOT_REPRODUCED` or `STILL_BREACHED` (§6.7) |
+| P4.5 | `scripts/happy_path.py`, also run automatically as part of every rerun |
+| P4.6 | CLI commands `siege fix <run_id>` and `siege rerun <run_id>`, plus `siege demo`, which runs, fixes and reruns in one go |
+| P4.7 | Tests: an allow/deny matrix for every fallback policy (alice, bob and carol × each action); the happy path is allowed under all fixes; `cedar_gen` falls back when the fake LLM returns an invalid policy twice |
+
+**Exit:** the G1 replay is `BLOCKED`, and the happy path passes.
+
+#### Phase 5 — Report
+
+| Step | Deliverable |
+|---|---|
+| P5.1 | `report/render.py` and `report/template.html`, as described in §8 |
+| P5.2 | `siege report <run_id>`, which writes `runs/<run_id>/report.html`. `siege demo` also produces it |
+
+**Exit:** the HTML report shows G1 before (the breach evidence) and after (`BLOCKED`, with the happy path OK).
+
+#### Phase 6 — More goals
+
+| Step | Deliverable |
+|---|---|
+| P6.1 | G2 (internal-notes leak / canary) working end to end: breach, policy, rerun |
+| P6.2 | G3 (indirect injection via the inbox) working end to end. The report shows that the G1 policy blocks it too |
+
+**Exit:** G2 and G3 each breach and are each `BLOCKED` on rerun, and the report covers all three goals.
+
+#### Phase 7 — Sandbox
+
+| Step | Deliverable |
+|---|---|
+| P7.1 | `sandbox/Dockerfile` and a run script with the §7 hardening (non-root user, all capabilities dropped, read-only root filesystem, DB volume only). `TARGET_URL` points at the container |
+| P7.2 | Egress restricted to the LLM API and the orchestrator, plus a check that the container can't reach other hosts or write outside the DB volume |
+| P7.3 | Firecracker on a Linux KVM host: a rootfs containing `target/`, tap networking, and a launch script |
+
+**Exit:** `siege demo` passes unchanged against Docker. It also passes against Firecracker if a KVM host is available; if none is, record the decision to use Docker here.
+
+#### Phase 8 — Demo hardening and stretch
+
+| Step | Deliverable |
+|---|---|
+| P8.1 | A recorded backup run (the full `siege demo` output plus the report) committed under `demo/` |
+| P8.2 | A demo script and rehearsal checklist |
+| P8.3 | Stretch work, in this order: G4 with the over-refund policy, adaptive rerun, the castle live view, TAP |
+
+**Exit:** the demo has been rehearsed end to end twice, and the backup run works offline.
+
+**Cut order under time pressure:** castle view → TAP → adaptive rerun → G4 → Firecracker (use Docker) → G3 → G2. Never cut anything in Phases 0–5.
+
+### 9.3 Status
+
+| Phase | Status | Notes |
 |---|---|---|
-| 1 | Test agent: tools, seed DB, canary, tool log, session API (Docker) | You can trick it into G1 by hand, and the tool log shows `executed=true` |
-| 2 | Evaluator | The manual G1 transcript is judged a breach, and a refusal transcript is not |
-| 3 | Attacker + orchestrator loop | An automated multi-turn G1 breach runs end to end and is stored in SQLite. **This is the MVP.** |
-| 4 | Cedar: schema, base, generate, validate, PEP, replay, happy path | G1 replay is `BLOCKED` and the happy path passes |
-| 5 | Report page | The HTML shows the before and after for G1 |
-| 6 | G2, G3 | Both breach, and both are blocked on rerun |
-| 7 | Firecracker on a Linux host (or confirm the Docker fallback) | The same run passes with `TARGET_URL` pointing at the VM |
-| 8 | Castle view, G4, adaptive rerun | If time remains |
+| 0 | In progress | Python 3.12 venv created and dependencies installed; `cedarpy` API verified (§6.1). Remaining: `pyproject.toml`, `.gitignore`, skeleton, `llm.py`, pytest wiring |
+| 1–8 | Not started | |
 
-If time runs short, cut in this order: castle view, then G4/adaptive rerun, then Firecracker (use Docker), then G2/G3 (do G1 really well).
+### 9.4 Open decisions
+
+| Decision | Needed by | Proposed default |
+|---|---|---|
+| LLM provider and credentials | P0.3 live test; exit of Phase 1 | Anthropic API: `claude-opus-5-5` for the attacker and Cedar generator, `claude-haiku-4-5` for the target and labeller. There are no credentials on the dev machine yet |
+| Target model accepts `temperature=0` | Phase 1 | Required for §2 and §6.7. Haiku 4.5 accepts sampling parameters; Opus 5.5 rejects them, so it can't be the target |
+| Ollama fallback model | Before Phase 3's live run | None pulled yet. Pick one that supports tool calling |
+| Docker daemon | Phase 7 | Docker Desktop is installed but not running |
+| Linux KVM host for Firecracker | P7.3; decide by the end of Phase 4 | None yet. If there's no host by then, commit to Docker |
 
 ---
 
@@ -346,7 +505,7 @@ If time runs short, cut in this order: castle view, then G4/adaptive rerun, then
 | Firecracker/KVM unavailable (it is **certain** on macOS) | Docker is the default. Secure a Linux KVM host early or commit to Docker |
 | Attacker LLM refuses to attack | Reframe and retry once. Keep a local open-weight model behind `llm_call` |
 | Non-deterministic breaks during the live demo | Temperature 0, a fixed canary and seed per run, and a **recorded backup run** of the whole flow |
-| Generated Cedar is invalid | `cedar validate`, one self-correction retry, then a hand-written fallback per goal so the rerun always has something to enforce |
+| Generated Cedar is invalid | `cedarpy.validate_policies`, one self-correction retry, then a hand-written fallback per goal so the rerun always has something to enforce |
 | A fix breaks legitimate use | The happy-path script is a required part of every rerun |
 | Replay doesn't reproduce | Report `NOT_REPRODUCED` honestly and retry up to 3 times. Never count it as blocked |
 | Scope creep | G1 end to end with a verified fix beats five half-working attack types |
