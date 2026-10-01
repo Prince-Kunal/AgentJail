@@ -265,7 +265,7 @@ def run_session(goal, run):
 | `fastapi` | 0.142.2 | default |
 | `uvicorn` | 0.54.0 | default |
 | `pydantic` | 2.13.5 | default |
-| `httpx` | 0.28.1 | default (also the Ollama client) |
+| `httpx` | 0.28.1 | default (FastAPI test client; `siege/llm.py` calls Ollama with the stdlib `urllib`) |
 | `pyyaml` | 6.0.3 | default |
 | `pytest` | 9.1.1 | `dev` |
 | `anthropic` | 1.10.0 | `cloud` (opt-in) |
