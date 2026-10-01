@@ -497,7 +497,7 @@ Goal: the full "attack → fix → prove the fix" story.
 | Decision | Needed by | Proposed default |
 |---|---|---|
 | LLM providers | — | **Decided (2026-10-01):** local Ollama for every role, with no paid keys required (§2). Cloud providers are opt-in |
-| Default Ollama model | Before Phase 1's live check | Placeholder `qwen2.5:7b`. Test it on the dev machine (Apple M4, 16 GB): it needs tool calling for the target, JSON output for the other roles, and acceptable speed. Pick the final default and record it here |
+| Default Ollama model | Before Phase 1's live check | Candidate `qwen2.5:7b` (Q4_K_M, 4.7 GB). **Verified 2026-10-01** on the dev machine (Apple M4, 16 GB): tool calling 12/12 correct across 4 ShopBot requests × 3 repeats; output identical across repeats at temperature 0 with a fixed seed; about 2.1 s per call (22 tokens/s). **Still to check:** the tool-result → final-answer turn, JSON-schema output (labeller), and Cedar policies passing `validate_policies` (Cedar generator). Confirm it as the default once those pass |
 | Judge hardware floor | P0.5 README | Whatever the chosen model needs (about 8 GB of free RAM for a 7–8B model). Below that, judges use the P8.1 judge path |
 | Docker daemon | Phase 7 | Docker Desktop is installed but not running |
 | Linux KVM host for Firecracker | P7.3; decide by the end of Phase 4 | None yet. If there's no host by then, commit to Docker |
