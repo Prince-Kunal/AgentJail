@@ -532,7 +532,7 @@ Goal: the full "attack → fix → prove the fix" story.
 
 | Phase | Status | Notes |
 |---|---|---|
-| 0 | In progress | Python 3.12 venv created and dependencies installed; `cedarpy` API verified (§6.1). Remaining: `pyproject.toml`, `.gitignore`, skeleton, `llm.py`, pytest wiring |
+| 0 | In progress | P0.1–P0.4 done. `pytest`: 40 unit tests (run by default, no network) and 3 `live` Ollama tests (`pytest -m live`), all passing. `llm.py` was written by hand against the P0.3 contract and reviewed. Remaining: P0.5 (README) |
 | 1–8 | Not started | |
 
 ### 9.4 Open decisions

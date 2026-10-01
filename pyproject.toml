@@ -29,3 +29,12 @@ siege = "siege.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["siege*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Import `siege` from the repo even when the editable-install .pth is skipped
+# (macOS can flag it hidden, and Python 3.12 ignores hidden .pth files).
+pythonpath = ["."]
+# Unit tests never touch a real LLM; run the live ones with `pytest -m live`.
+addopts = "-m 'not live'"
+markers = ["live: calls a real local LLM through Ollama (run with `pytest -m live`)"]
