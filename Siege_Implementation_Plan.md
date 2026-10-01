@@ -532,7 +532,7 @@ Goal: the full "attack → fix → prove the fix" story.
 
 | Phase | Status | Notes |
 |---|---|---|
-| 0 | In progress | P0.1–P0.4 done. `pytest`: 40 unit tests (run by default, no network) and 3 `live` Ollama tests (`pytest -m live`), all passing. `llm.py` was written by hand against the P0.3 contract and reviewed. Remaining: P0.5 (README) |
+| 0 | **Done** (2026-10-02) | P0.1–P0.5 done. `pytest`: 40 unit tests (run by default, no network) and 3 `live` Ollama tests (`pytest -m live`), all passing. `llm.py` was written by hand against the P0.3 contract and reviewed. The README quickstart was verified in a fresh clone from GitHub. Merged to `main` |
 | 1–8 | Not started | |
 
 ### 9.4 Open decisions
