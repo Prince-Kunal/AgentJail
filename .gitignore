@@ -1,0 +1,19 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Secrets and local config
+.env
+
+# Run artifacts (SQLite DBs, reports)
+runs/
+*.db
+*.db-journal
+
+# OS
+.DS_Store
