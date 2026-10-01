@@ -8,7 +8,7 @@ Model names live here and nowhere else.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -20,6 +20,9 @@ ROLES = ("attacker", "target", "labeller", "cedar")
 # shared model, so anyone can clone and run Siege with no paid API key.
 # Cloud providers are opt-in via .env.
 DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
+# Cedar generator cascade (plan §6.5): each model is tried in order until a
+# policy passes validation and the goal's decision tests.
+DEFAULT_CEDAR_MODELS = (DEFAULT_OLLAMA_MODEL, "qwen2.5:14b")
 
 _ROLE_DEFAULTS: dict[str, dict[str, str]] = {
     "attacker": {"provider": "ollama", "model": DEFAULT_OLLAMA_MODEL},
@@ -55,7 +58,8 @@ class Settings:
     attacker: RoleConfig
     target: RoleConfig
     labeller: RoleConfig
-    cedar: RoleConfig
+    cedar: RoleConfig  # provider and options for the cascade; `model` is its first entry
+    cedar_models: tuple[str, ...]
     max_turns: int
     attacker_user: str
     target_url: str
@@ -115,15 +119,30 @@ def _role_config(role: str) -> RoleConfig:
     )
 
 
+def _cedar_models() -> tuple[str, ...]:
+    """SIEGE_CEDAR_MODELS (comma-separated) wins; a lone SIEGE_CEDAR_MODEL means a one-model cascade."""
+    listed = _env("SIEGE_CEDAR_MODELS")
+    if listed:
+        models = tuple(m.strip() for m in listed.split(",") if m.strip())
+        if not models:
+            raise ValueError("SIEGE_CEDAR_MODELS is set but lists no models")
+        return models
+    single = _env("SIEGE_CEDAR_MODEL")
+    return (single,) if single else DEFAULT_CEDAR_MODELS
+
+
 def load_settings() -> Settings:
     """Build Settings from the environment (after loading `.env`)."""
     load_dotenv(_env("SIEGE_ENV_FILE", ".env"))
     runs_dir = Path(_env("SIEGE_RUNS_DIR", "runs"))
+    cedar_models = _cedar_models()
+    cedar = replace(_role_config("cedar"), model=cedar_models[0])
     return Settings(
         attacker=_role_config("attacker"),
         target=_role_config("target"),
         labeller=_role_config("labeller"),
-        cedar=_role_config("cedar"),
+        cedar=cedar,
+        cedar_models=cedar_models,
         max_turns=int(_env("SIEGE_MAX_TURNS", "10")),
         attacker_user=_env("SIEGE_ATTACKER_USER", "alice"),
         target_url=_env("SIEGE_TARGET_URL", "http://127.0.0.1:8100"),
