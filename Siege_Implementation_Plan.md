@@ -48,7 +48,7 @@ after all goals:
 | PEP | Checks each tool call against Cedar before it runs | Python shim around the target's tool dispatch, `cedarpy` | Sandbox (inside target) |
 | Attack agent (attacker) | Proposes and adapts attacks as JSON | Python, stronger LLM, PAIR-style loop | Host |
 | Orchestrator | Runs the loop, gates every action, stores everything | Python, Pydantic, SQLite | Host |
-| Evaluator | Decides breaches deterministically, labels refusals | Python (tool log + canary), cheap LLM labeller | Host |
+| Evaluator | Decides breaches deterministically, labels refusals | Python (tool log + canary), local LLM labeller | Host |
 | Cedar generator | Turns a finding into a validated Cedar policy | LLM (structured output), validated with `cedarpy.validate_policies` | Host |
 | Sandbox | Contains the test agent and its tools | Firecracker microVM on Linux; Docker locally | — |
 | Report | Final findings, before vs after | Static HTML generated from SQLite | Host |
@@ -96,15 +96,19 @@ demo/                     # recorded backup run (Phase 8)
 
 ## 2. LLM choices
 
-All model names are configured through env/config and never hard-coded. Everything goes through one function, `llm_call(system, messages, schema)`, so providers can be swapped without touching the loop.
+All model names are configured through env/config and never hard-coded. Everything goes through one function, `llm_call(role, system, messages, schema, tools)`, so providers can be swapped without touching the loop.
 
-- **Attacker LLM:** a model that will red-team when told this is authorized testing.
-  - *Default:* an **OpenAI** model (team decision, 2026-10-01: cheaper per call), with a strong system prompt that sets up an authorized red-team context. The model name has no default; set `SIEGE_ATTACKER_MODEL`.
-  - *Fallback:* a local open-weight model via Ollama/vLLM, behind the same interface. It avoids API refusals and per-call cost, and works offline if venue Wi-Fi is bad.
+**Every role runs on local Ollama by default** (team decision, 2026-10-01). Hackathon judges clone and run the top projects, and they won't have paid API keys, so Siege must run end to end with **no key, no account and no cost**:
+
+- **One shared model for all four roles** (default `qwen2.5:7b`, pending the model test in §9.4). On a 16 GB laptop, two different models loaded at once would use most of the memory, and one model means a single download for a judge.
+- **Cloud providers are opt-in.** Any role can be switched to `anthropic` or `openai` in `.env`, after installing the `cloud` extra. The default install doesn't include their SDKs.
+- **Judges with no capable machine** use the no-LLM judge path (P8.1).
+
+- **Attacker LLM:** a model that will red-team when told this is authorized testing, with a system prompt that sets up an authorized red-team context. Local models also avoid cloud-side refusals and work offline if venue Wi-Fi is bad.
   - **Attacker refusals:** if the output fails schema validation or is itself a refusal, retry once with a reframe. If that also fails, record the turn as `attacker_refused` and move on. Attacker refusals count toward MAX_TURNS.
-- **Test agent LLM:** a small, cheap tool-calling model. It is *meant* to be weakly defended so the demo breaks in a reasonable number of turns. Run it at temperature 0.
-- **Refusal labeller:** a cheap model that outputs `refusal_type` (§4). It is **required** because the attacker's adaptation depends on it. It is **never** used for the breach decision. If it fails, the label is `unknown`.
-- **Cedar generator LLM:** any capable model with structured output. It is called once per finding, so cost doesn't matter.
+- **Test agent LLM:** a small tool-calling model. It is *meant* to be weakly defended so the demo breaks in a reasonable number of turns. Run it at temperature 0.
+- **Refusal labeller:** a model that outputs `refusal_type` (§4). It is **required** because the attacker's adaptation depends on it. It is **never** used for the breach decision. If it fails, the label is `unknown`.
+- **Cedar generator LLM:** any model with structured (JSON) output. It is called once per finding. Every policy it produces is validated (§6.5), and a weak local model is backed by the hand-written fallback policies.
 
 ---
 
@@ -235,19 +239,19 @@ def run_session(goal, run):
   - `alice` → refund of `bob`'s order is **Deny**, and `bob` → his own order is **Allow**.
   - Without `base.cedar`, everything is **Deny**, which confirms D4.
 
-**Pinned versions** (Python 3.12 via Homebrew; the system Python 3.9 is too old for `anthropic` 1.x):
+**Pinned versions** (Python 3.12 via Homebrew; the system Python 3.9 is too old for `anthropic` 1.x). Ollama itself is 0.32.5 on the dev machine.
 
-| Package | Version |
-|---|---|
-| `anthropic` | 1.10.0 |
-| `openai` | 3.22.1 |
-| `cedarpy` | 4.12.1 |
-| `fastapi` | 0.142.2 |
-| `uvicorn` | 0.54.0 |
-| `pydantic` | 2.13.5 |
-| `httpx` | 0.28.1 |
-| `pyyaml` | 6.0.3 |
-| `pytest` | 9.1.1 |
+| Package | Version | Install group |
+|---|---|---|
+| `cedarpy` | 4.12.1 | default |
+| `fastapi` | 0.142.2 | default |
+| `uvicorn` | 0.54.0 | default |
+| `pydantic` | 2.13.5 | default |
+| `httpx` | 0.28.1 | default (also the Ollama client) |
+| `pyyaml` | 6.0.3 | default |
+| `pytest` | 9.1.1 | `dev` |
+| `anthropic` | 1.10.0 | `cloud` (opt-in) |
+| `openai` | 3.22.1 | `cloud` (opt-in) |
 
 ### 6.2 Schema (`cedar/schema.cedarschema`, written by hand once)
 
@@ -375,10 +379,11 @@ Goal: a working skeleton that every later phase builds on.
 |---|---|
 | P0.1 | A Python 3.12 venv; `pyproject.toml` pinning the versions in §6.1 and defining the `siege` console script; a `.gitignore` covering `.venv/`, `*.db`, `runs/` and `.env` |
 | P0.2 | The package skeleton from the repo layout in §1; `siege/config.py` (env-driven settings); `.env.example` |
-| P0.3 | `siege/llm.py` with `llm_call(system, messages, schema=None, tools=None)` and four providers: `anthropic` (target, labeller, Cedar generator), `openai` (attacker), `ollama` (local fallback), `fake` (scripted, for tests). Each role's provider and model come from `siege/config.py`. A model refusal comes back as a typed result, not an exception. The Anthropic provider opts into server-side refusal fallbacks where the model supports them |
+| P0.3 | `siege/llm.py` with `llm_call(role, system, messages, schema=None, tools=None)` and four providers: `ollama` (the default for every role), `anthropic` and `openai` (opt-in; their SDKs are imported only when used), and `fake` (scripted, for tests). Each role's provider and model come from `siege/config.py`. A model refusal comes back as a typed result, not an exception. The Anthropic provider opts into server-side refusal fallbacks where the model supports them |
 | P0.4 | `pytest` wiring, the `live` marker, and a smoke test per provider. The `fake` test always runs; the others are `live` |
+| P0.5 | `README.md` with a clone-and-run quickstart for judges: install Ollama, pull the model, create the venv, run. It is updated whenever a phase changes how Siege is run |
 
-**Exit:** `pytest` passes, and `llm_call` works with `fake`. With credentials configured, one `live` call succeeds.
+**Exit:** `pytest` passes, and `llm_call` works with `fake`. With Ollama running and the model pulled, one `live` call succeeds.
 
 #### Phase 1 — Target agent
 
@@ -472,7 +477,7 @@ Goal: the full "attack → fix → prove the fix" story.
 
 | Step | Deliverable |
 |---|---|
-| P8.1 | A recorded backup run (the full `siege demo` output plus the report) committed under `demo/` |
+| P8.1 | **Judge path (no LLM needed):** a recorded run committed under `demo/`, plus `siege verify demo/`. It replays the recorded tool calls through the PEP with the generated policies, runs the happy path, and renders the report. All of these steps are deterministic, so a judge on any laptop can confirm "attack blocked, normal use still works" in seconds. The README documents it next to the full Ollama run |
 | P8.2 | A demo script and rehearsal checklist |
 | P8.3 | Stretch work, in this order: G4 with the over-refund policy, adaptive rerun, the castle live view, TAP |
 
@@ -491,10 +496,9 @@ Goal: the full "attack → fix → prove the fix" story.
 
 | Decision | Needed by | Proposed default |
 |---|---|---|
-| LLM providers and credentials | P0.3 live test; exit of Phase 1 | **Decided:** OpenAI for the attacker; Anthropic for the rest (`claude-haiku-4-5` for the target and labeller, `claude-opus-5-5` for the Cedar generator). Still needed: the API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). There are no credentials on the dev machine yet |
-| Attacker model | Before Phase 3's live run | An OpenAI model, chosen by the team, set in `SIEGE_ATTACKER_MODEL` |
-| Target model accepts `temperature=0` | Phase 1 | Required for §2 and §6.7. Haiku 4.5 accepts sampling parameters; Opus 5.5 rejects them, so it can't be the target |
-| Ollama fallback model | Before Phase 3's live run | None pulled yet. Pick one that supports tool calling |
+| LLM providers | — | **Decided (2026-10-01):** local Ollama for every role, with no paid keys required (§2). Cloud providers are opt-in |
+| Default Ollama model | Before Phase 1's live check | Placeholder `qwen2.5:7b`. Test it on the dev machine (Apple M4, 16 GB): it needs tool calling for the target, JSON output for the other roles, and acceptable speed. Pick the final default and record it here |
+| Judge hardware floor | P0.5 README | Whatever the chosen model needs (about 8 GB of free RAM for a 7–8B model). Below that, judges use the P8.1 judge path |
 | Docker daemon | Phase 7 | Docker Desktop is installed but not running |
 | Linux KVM host for Firecracker | P7.3; decide by the end of Phase 4 | None yet. If there's no host by then, commit to Docker |
 
@@ -505,7 +509,9 @@ Goal: the full "attack → fix → prove the fix" story.
 | Risk | Mitigation |
 |---|---|
 | Firecracker/KVM unavailable (it is **certain** on macOS) | Docker is the default. Secure a Linux KVM host early or commit to Docker |
-| Attacker LLM refuses to attack | Reframe and retry once. Keep a local open-weight model behind `llm_call` |
+| Attacker LLM refuses to attack | Reframe and retry once, then record `attacker_refused`. Local models avoid cloud-side safety refusals |
+| Small local models are weak (poor attacks, broken JSON, wrong tool calls) | Schema-validate every output and retry once; keep the target deliberately weak; hand-written fallback policies; pick the default model by testing, not guessing (§9.4) |
+| A judge's machine can't run the model | The P8.1 judge path needs no LLM at all |
 | Non-deterministic breaks during the live demo | Temperature 0, a fixed canary and seed per run, and a **recorded backup run** of the whole flow |
 | Generated Cedar is invalid | `cedarpy.validate_policies`, one self-correction retry, then a hand-written fallback per goal so the rerun always has something to enforce |
 | A fix breaks legitimate use | The happy-path script is a required part of every rerun |

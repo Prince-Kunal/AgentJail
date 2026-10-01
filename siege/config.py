@@ -16,14 +16,16 @@ PROVIDERS = ("anthropic", "openai", "ollama", "fake")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 ROLES = ("attacker", "target", "labeller", "cedar")
 
-# Defaults from plan §2 and §9.4. The attacker runs on OpenAI, and its model
-# has no default: set SIEGE_ATTACKER_MODEL. The target and labeller need a
-# model that accepts sampling parameters, so that temperature 0 can be applied.
+# Defaults from plan §2 and §9.4: every role runs on local Ollama with one
+# shared model, so anyone can clone and run Siege with no paid API key.
+# Cloud providers are opt-in via .env.
+DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
+
 _ROLE_DEFAULTS: dict[str, dict[str, str]] = {
-    "attacker": {"provider": "openai", "model": ""},
-    "target": {"provider": "anthropic", "model": "claude-haiku-4-5", "temperature": "0"},
-    "labeller": {"provider": "anthropic", "model": "claude-haiku-4-5", "temperature": "0"},
-    "cedar": {"provider": "anthropic", "model": "claude-opus-5-5", "effort": "high"},
+    "attacker": {"provider": "ollama", "model": DEFAULT_OLLAMA_MODEL},
+    "target": {"provider": "ollama", "model": DEFAULT_OLLAMA_MODEL, "temperature": "0"},
+    "labeller": {"provider": "ollama", "model": DEFAULT_OLLAMA_MODEL, "temperature": "0"},
+    "cedar": {"provider": "ollama", "model": DEFAULT_OLLAMA_MODEL, "temperature": "0"},
 }
 
 
