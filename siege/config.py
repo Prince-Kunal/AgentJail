@@ -12,14 +12,15 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-PROVIDERS = ("anthropic", "ollama", "fake")
+PROVIDERS = ("anthropic", "openai", "ollama", "fake")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 ROLES = ("attacker", "target", "labeller", "cedar")
 
-# Defaults proposed in plan §9.4. The target and labeller need a model that
-# accepts sampling parameters, so that temperature 0 can be applied.
+# Defaults from plan §2 and §9.4. The attacker runs on OpenAI, and its model
+# has no default: set SIEGE_ATTACKER_MODEL. The target and labeller need a
+# model that accepts sampling parameters, so that temperature 0 can be applied.
 _ROLE_DEFAULTS: dict[str, dict[str, str]] = {
-    "attacker": {"provider": "anthropic", "model": "claude-opus-5-5", "effort": "medium"},
+    "attacker": {"provider": "openai", "model": ""},
     "target": {"provider": "anthropic", "model": "claude-haiku-4-5", "temperature": "0"},
     "labeller": {"provider": "anthropic", "model": "claude-haiku-4-5", "temperature": "0"},
     "cedar": {"provider": "anthropic", "model": "claude-opus-5-5", "effort": "high"},
@@ -28,7 +29,11 @@ _ROLE_DEFAULTS: dict[str, dict[str, str]] = {
 
 @dataclass(frozen=True)
 class RoleConfig:
-    """Which provider and model one LLM role uses, and how it is called."""
+    """Which provider and model one LLM role uses, and how it is called.
+
+    `model` may be empty when no default exists. Settings still load, so
+    unrelated code keeps working; `require_model()` fails when the role is used.
+    """
 
     role: str
     provider: str
@@ -36,6 +41,11 @@ class RoleConfig:
     temperature: float | None = None
     effort: str | None = None
     max_tokens: int = 16000
+
+    def require_model(self) -> str:
+        if not self.model:
+            raise ValueError(f"no model set for the {self.role} role: set SIEGE_{self.role.upper()}_MODEL")
+        return self.model
 
 
 @dataclass(frozen=True)
@@ -96,7 +106,7 @@ def _role_config(role: str) -> RoleConfig:
     return RoleConfig(
         role=role,
         provider=provider,
-        model=_env(prefix + "MODEL", defaults["model"]),
+        model=_env(prefix + "MODEL", defaults["model"]) or "",
         temperature=float(temperature) if temperature is not None else None,
         effort=effort,
         max_tokens=int(_env(prefix + "MAX_TOKENS", "16000")),

@@ -99,7 +99,7 @@ demo/                     # recorded backup run (Phase 8)
 All model names are configured through env/config and never hard-coded. Everything goes through one function, `llm_call(system, messages, schema)`, so providers can be swapped without touching the loop.
 
 - **Attacker LLM:** a model that will red-team when told this is authorized testing.
-  - *Default:* a frontier API model with a strong system prompt that sets up an authorized red-team context.
+  - *Default:* an **OpenAI** model (team decision, 2026-10-01: cheaper per call), with a strong system prompt that sets up an authorized red-team context. The model name has no default; set `SIEGE_ATTACKER_MODEL`.
   - *Fallback:* a local open-weight model via Ollama/vLLM, behind the same interface. It avoids API refusals and per-call cost, and works offline if venue Wi-Fi is bad.
   - **Attacker refusals:** if the output fails schema validation or is itself a refusal, retry once with a reframe. If that also fails, record the turn as `attacker_refused` and move on. Attacker refusals count toward MAX_TURNS.
 - **Test agent LLM:** a small, cheap tool-calling model. It is *meant* to be weakly defended so the demo breaks in a reasonable number of turns. Run it at temperature 0.
@@ -240,6 +240,7 @@ def run_session(goal, run):
 | Package | Version |
 |---|---|
 | `anthropic` | 1.10.0 |
+| `openai` | 3.22.1 |
 | `cedarpy` | 4.12.1 |
 | `fastapi` | 0.142.2 |
 | `uvicorn` | 0.54.0 |
@@ -374,7 +375,7 @@ Goal: a working skeleton that every later phase builds on.
 |---|---|
 | P0.1 | A Python 3.12 venv; `pyproject.toml` pinning the versions in §6.1 and defining the `siege` console script; a `.gitignore` covering `.venv/`, `*.db`, `runs/` and `.env` |
 | P0.2 | The package skeleton from the repo layout in §1; `siege/config.py` (env-driven settings); `.env.example` |
-| P0.3 | `siege/llm.py` with `llm_call(system, messages, schema=None, tools=None)` and three providers: `anthropic` (default), `ollama` (local fallback), `fake` (scripted, for tests). A model refusal comes back as a typed result, not an exception. The Anthropic provider opts into server-side refusal fallbacks where the model supports them |
+| P0.3 | `siege/llm.py` with `llm_call(system, messages, schema=None, tools=None)` and four providers: `anthropic` (target, labeller, Cedar generator), `openai` (attacker), `ollama` (local fallback), `fake` (scripted, for tests). Each role's provider and model come from `siege/config.py`. A model refusal comes back as a typed result, not an exception. The Anthropic provider opts into server-side refusal fallbacks where the model supports them |
 | P0.4 | `pytest` wiring, the `live` marker, and a smoke test per provider. The `fake` test always runs; the others are `live` |
 
 **Exit:** `pytest` passes, and `llm_call` works with `fake`. With credentials configured, one `live` call succeeds.
@@ -490,7 +491,8 @@ Goal: the full "attack → fix → prove the fix" story.
 
 | Decision | Needed by | Proposed default |
 |---|---|---|
-| LLM provider and credentials | P0.3 live test; exit of Phase 1 | Anthropic API: `claude-opus-5-5` for the attacker and Cedar generator, `claude-haiku-4-5` for the target and labeller. There are no credentials on the dev machine yet |
+| LLM providers and credentials | P0.3 live test; exit of Phase 1 | **Decided:** OpenAI for the attacker; Anthropic for the rest (`claude-haiku-4-5` for the target and labeller, `claude-opus-5-5` for the Cedar generator). Still needed: the API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). There are no credentials on the dev machine yet |
+| Attacker model | Before Phase 3's live run | An OpenAI model, chosen by the team, set in `SIEGE_ATTACKER_MODEL` |
 | Target model accepts `temperature=0` | Phase 1 | Required for §2 and §6.7. Haiku 4.5 accepts sampling parameters; Opus 5.5 rejects them, so it can't be the target |
 | Ollama fallback model | Before Phase 3's live run | None pulled yet. Pick one that supports tool calling |
 | Docker daemon | Phase 7 | Docker Desktop is installed but not running |
