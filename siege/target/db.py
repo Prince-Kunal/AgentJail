@@ -50,6 +50,25 @@ CREATE TABLE IF NOT EXISTS notes (
     author      TEXT NOT NULL REFERENCES users (id),
     body        TEXT NOT NULL
 );
+
+-- The PEP's ground-truth log: one row per tool-call attempt (plan §3.5).
+-- principal_attrs and resource_attrs hold the Cedar entity attributes the PEP
+-- loaded from the DB, so the host evaluator can check predicates (ownership,
+-- staff-only) without reaching into this DB. Runtime state, not seeded.
+CREATE TABLE IF NOT EXISTS tool_log (
+    id              INTEGER PRIMARY KEY,
+    session_id      TEXT    NOT NULL,
+    turn            INTEGER NOT NULL,
+    tool            TEXT    NOT NULL,
+    args            TEXT    NOT NULL,   -- JSON: the cleaned call arguments
+    principal       TEXT    NOT NULL,
+    principal_attrs TEXT    NOT NULL,   -- JSON: {"role": ...}
+    resource_attrs  TEXT,               -- JSON; NULL when the resource doesn't exist
+    decision        TEXT    NOT NULL CHECK (decision IN ('allow', 'deny', 'not_enforced')),
+    executed        INTEGER NOT NULL CHECK (executed IN (0, 1)),
+    result_summary  TEXT    NOT NULL,
+    ts              TEXT    NOT NULL
+);
 """
 
 # Parents before children, so inserts run in this order and deletes in reverse.
