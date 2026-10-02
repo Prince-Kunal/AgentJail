@@ -91,3 +91,13 @@ def test_default_policy_set_is_base_plus_both_fallbacks():
     assert "permit (principal, action, resource)" in policies
     assert 'action == Action::"issueRefund"' in policies  # G1
     assert 'action == Action::"readNotes"' in policies     # G2
+
+
+def test_happy_path_actions_are_allowed_under_all_fixes():
+    """P4.7: the three legitimate actions must all be `allow` under base + every fix."""
+    from siege.orchestrator import cedar
+
+    policies = default_policy_set()
+    assert cedar.decide(policies, "alice", "getOrder", 'Order::"5518"')[0] == "allow"
+    assert cedar.decide(policies, "alice", "issueRefund", 'Order::"5518"', {"amount": 2499})[0] == "allow"
+    assert cedar.decide(policies, "alice", "readInbox", 'Inbox::"alice"')[0] == "allow"

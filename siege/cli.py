@@ -1,8 +1,10 @@
-"""The `siege` command line (plan §9, P3.4).
+"""The `siege` command line (plan §9, P3.4, P4.6).
 
-For now: `siege run` runs goals against the target and stores the result, and
-`siege show` prints a stored run. `fix`, `rerun`, `report` and `demo` arrive in
-Phases 4-5.
+`siege run` attacks the goals and stores the result; `siege show` prints a stored
+run; `siege fix <run_id>` generates a Cedar fix per finding (§6.4-6.5); `siege
+rerun <run_id>` replays each finding with the PEP on and runs the happy path
+(§6.7); and `siege demo` does run + fix + rerun in one go against a single target.
+`report` arrives in Phase 5.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import sys
 from typing import Sequence
 
 from siege.config import get_settings
+from siege.orchestrator import cedar_gen, rerun
 from siege.orchestrator.goals import load_goals
 from siege.orchestrator.loop import SessionResult, TurnEvent, run_session
 from siege.orchestrator.store import Store
@@ -45,6 +48,17 @@ def print_turn_event(event: TurnEvent) -> None:
         print(f"      tool: {call.get('tool')} [{call.get('decision')}, {flag}]")
     tag = "  *** BREACH ***" if event.breach else ""
     print(f"    refusal_type={event.refusal_type}  breach={event.breach}{tag}")
+
+
+def print_policy(finding: dict, result) -> None:
+    where = result.source + (f" by {result.model}" if result.model else "")
+    print(f"  {finding['goal_id']}: {where} — {len(result.attempts)} attempt(s), valid={result.valid}")
+    if result.rationale:
+        print(f"    rationale: {_trunc(result.rationale, 140)}")
+
+
+def print_replay(r) -> None:
+    print(f"  {r.goal_id}: {r.outcome} (after {r.tries} try/tries)")
 
 
 def _run_goals(goal_ids: Sequence[str], run, target, store, max_turns) -> list[SessionResult]:
@@ -140,6 +154,106 @@ def cmd_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fix(args: argparse.Namespace) -> int:
+    store = Store()
+    try:
+        run = store.get_run(args.run_id)
+        if run is None:
+            print(f"no run {args.run_id}", file=sys.stderr)
+            return 1
+        findings = store.findings(run.id)
+        if not findings:
+            print(f"run {run.id} has no findings to fix.")
+            return 0
+        print(f"run {run.id}: generating Cedar fixes for {len(findings)} finding(s) "
+              f"(cascade: {', '.join(get_settings().cedar_models)})")
+        done = cedar_gen.fix_run(run, store, on_policy=print_policy)
+        skipped = len(findings) - len(done)
+        if skipped:
+            print(f"  ({skipped} finding(s) already had a valid policy; skipped)")
+        generated = sum(1 for _f, r in done if r.source == "generated")
+        print(f"\nrun {run.id}: {generated} generated, {len(done) - generated} fell back. "
+              f"See `siege rerun {run.id}`.")
+    finally:
+        store.close()
+    return 0
+
+
+def cmd_rerun(args: argparse.Namespace) -> int:
+    store = Store()
+    try:
+        run = store.get_run(args.run_id)
+        if run is None:
+            print(f"no run {args.run_id}", file=sys.stderr)
+            return 1
+        findings = store.findings(run.id)
+        if not findings:
+            print(f"run {run.id} has no findings to rerun.")
+            return 0
+        target_model = (run.config.get("models") or {}).get("target")
+        print(f"run {run.id}: replaying {len(findings)} finding(s) with the PEP ON"
+              + (f" (target {target_model})" if target_model else ""))
+        if args.no_launch:
+            with TargetClient() as target:
+                result = rerun.rerun(run, store, target, on_replay=print_replay)
+        else:
+            with launched_target(run.canary or _new_canary(), model=target_model) as target:
+                result = rerun.rerun(run, store, target, on_replay=print_replay)
+        print("\n" + result.summary())
+    finally:
+        store.close()
+    return 0 if result.ok else 1
+
+
+def cmd_demo(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    goals = load_goals()
+    goal_ids = args.goal or list(goals)
+    unknown = [g for g in goal_ids if g not in goals]
+    if unknown:
+        print(f"unknown goal(s): {', '.join(unknown)}; known: {', '.join(goals)}", file=sys.stderr)
+        return 2
+    max_turns = args.max_turns if args.max_turns is not None else settings.max_turns
+    canary = _new_canary()
+    target_model = args.target_model or settings.role("target").model
+    config = {
+        "models": {
+            "attacker": settings.role("attacker").model,
+            "target": target_model,
+            "labeller": settings.role("labeller").model,
+        },
+        "max_turns": max_turns,
+        "canary": canary,
+        "attacker_user": settings.attacker_user,
+        "goals": goal_ids,
+        "seed": os.environ.get("SIEGE_SEED"),
+    }
+    store = Store()
+    run = store.create_run(config)
+    print(f"demo run {run.id} (canary {canary[:13]}..., target_model {target_model})")
+    try:
+        with launched_target(canary, model=args.target_model) as target:
+            print("\n== ATTACK (PEP off) ==")
+            results = _run_goals(goal_ids, run, target, store, max_turns)
+            if not any(r.breached for r in results):
+                print("\nno breaches; nothing to fix or rerun.")
+                return 0
+            print("\n== FIX (generate Cedar policies) ==")
+            cedar_gen.fix_run(run, store, on_policy=print_policy)
+            print("\n== RERUN (PEP on) ==")
+            rr = rerun.rerun(run, store, target, on_replay=print_replay)
+            print("\n" + rr.summary())
+            breached = sum(r.breached for r in results)
+            c = rr.outcomes()
+            print(f"\ndemo run {run.id}: {breached} breach(es) → {c['BLOCKED']} blocked, "
+                  f"{c['NOT_REPRODUCED']} not reproduced, {c['STILL_BREACHED']} still breached; "
+                  f"happy path {'OK' if rr.happy_path and rr.happy_path.ok else 'FAILED'}. "
+                  f"See `siege show {run.id}`.")
+            return 0 if rr.ok else 1
+    finally:
+        store.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="siege", description="Adaptive AI red team for AI agents.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -154,6 +268,22 @@ def build_parser() -> argparse.ArgumentParser:
     show = sub.add_parser("show", help="print a stored run")
     show.add_argument("run_id", type=int)
     show.set_defaults(func=cmd_show)
+
+    fix = sub.add_parser("fix", help="generate and store a Cedar fix for each finding of a run")
+    fix.add_argument("run_id", type=int)
+    fix.set_defaults(func=cmd_fix)
+
+    rerun_p = sub.add_parser("rerun", help="replay each finding with the PEP on and run the happy path")
+    rerun_p.add_argument("run_id", type=int)
+    rerun_p.add_argument("--no-launch", action="store_true",
+                         help="use an already-running target instead of launching one")
+    rerun_p.set_defaults(func=cmd_rerun)
+
+    demo = sub.add_parser("demo", help="run, fix and rerun in one go against a single target")
+    demo.add_argument("--goal", action="append", help="goal id (repeatable); default: all goals")
+    demo.add_argument("--max-turns", type=int, default=None, help="override MAX_TURNS")
+    demo.add_argument("--target-model", default=None, help="model for the launched target (e.g. qwen2.5:7b)")
+    demo.set_defaults(func=cmd_demo)
 
     return parser
 
