@@ -80,11 +80,33 @@ def test_parser_requires_a_subcommand():
 # --- fix / rerun / demo (P4.6) ----------------------------------------------
 
 
-def test_parser_registers_fix_rerun_demo():
+def test_parser_registers_fix_rerun_report_demo():
     parser = cli.build_parser()
     assert parser.parse_args(["fix", "3"]).func is cli.cmd_fix
     assert parser.parse_args(["rerun", "3"]).func is cli.cmd_rerun
+    assert parser.parse_args(["report", "3"]).func is cli.cmd_report
     assert parser.parse_args(["demo"]).func is cli.cmd_demo
+
+
+def test_report_unknown_run_is_error(db, capsys):
+    assert cli.main(["report", "999"]) == 1
+    assert "no run 999" in capsys.readouterr().err
+
+
+def test_report_writes_the_html_file(db, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SIEGE_RUNS_DIR", str(tmp_path / "runs"))
+    get_settings.cache_clear()
+    store = Store(db)
+    run = store.create_run({"goals": ["G1"], "attacker_user": "alice"})
+    store.record_finding(run.id, "G1", turns_to_breach=1, winning_strategy="x",
+                         evidence_tool_call={"description": "issue_refund on bob's order"}, severity="critical")
+    store.close()
+
+    assert cli.main(["report", str(run.id)]) == 0
+    out = capsys.readouterr().out
+    assert "wrote" in out and "report.html" in out
+    written = (tmp_path / "runs" / str(run.id) / "report.html")
+    assert written.exists() and "Siege" in written.read_text(encoding="utf-8")
 
 
 def test_fix_unknown_run_is_error(db, capsys):
