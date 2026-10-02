@@ -103,6 +103,7 @@ def run_turn(
     message: str,
     history: list[Message] | None = None,
     max_tool_iters: int = MAX_TOOL_ITERS,
+    policies: str = "",
 ) -> TurnResult:
     """Run one agent turn for `session`, dispatching every tool call through the PEP."""
     system = system_prompt(session.principal)
@@ -118,7 +119,7 @@ def run_turn(
         if not result.tool_calls:
             return TurnResult(result.text, calls, messages)
         for call in result.tool_calls:
-            dr = dispatch(conn, session, turn, call.name, call.arguments)
+            dr = dispatch(conn, session, turn, call.name, call.arguments, policies)
             calls.append(ToolCallRecord(dr.tool, dr.args, dr.decision, dr.executed, dr.result_summary))
             messages.append(Message.tool_result(call, dr.content))
 

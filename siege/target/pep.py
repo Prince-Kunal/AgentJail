@@ -5,18 +5,26 @@ arguments, maps the tool to its Cedar action and resource (§3.2), loads the
 principal's and resource's attributes from the DB, runs the tool, and writes one
 `tool_log` row. The principal comes from the session, never from the message (D3).
 
-This phase supports only `enforce=false`, so every decision is `not_enforced`
-(plan P1.3). The Cedar path -- building entities, calling `is_authorized`, and
-denying on a `forbid` -- is added in P4.2, in the marked branch below.
+With `enforce=false` every decision is `not_enforced` and the tool runs. With
+`enforce=true` (P4.2) the Cedar path runs first: entities are built from the DB,
+`is_authorized` is called against the loaded policy set, and on a deny the tool
+does not run (`decision=deny`, executed=false, "Action denied by policy"). Any
+Cedar evaluation error counts as a deny, and an empty policy set denies everything
+(default-deny, D4). The PEP reads only the shared schema file, never orchestrator
+code.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+
+import cedarpy
 
 from siege.target.tools import (
     TOOLS,
@@ -25,6 +33,11 @@ from siege.target.tools import (
     normalize_user_id,
     parse_amount_cents,
 )
+
+# Shared schema file (siege/cedar/schema.cedarschema); read directly so the target
+# stays independent of the orchestrator (§9.1).
+_SCHEMA = (Path(__file__).resolve().parent.parent / "cedar" / "schema.cedarschema").read_text()
+_UID_RE = re.compile(r'^(\w+)::"(.*)"$')
 
 
 @dataclass(frozen=True)
@@ -50,29 +63,34 @@ class DispatchResult:
     content: str  # what the agent feeds back to the LLM as the tool result
 
 
-def dispatch(conn: sqlite3.Connection, session: Session, turn: int, tool: str, args: Any) -> DispatchResult:
-    """Run one tool call for `session` at `turn`, logging the attempt either way."""
+def dispatch(
+    conn: sqlite3.Connection, session: Session, turn: int, tool: str, args: Any, policies: str = ""
+) -> DispatchResult:
+    """Run one tool call for `session` at `turn`, enforcing `policies` when the session enforces."""
     principal_attrs = _user_attrs(conn, session.principal)
     try:
-        _action, _resource, resource_attrs, _context, call_args = _bind(conn, session.principal, tool, args)
+        action, resource, resource_attrs, context, call_args = _bind(conn, session.principal, tool, args)
     except ToolError as exc:
         # Malformed call (unknown tool, missing or bad argument): the resource
-        # can't even be resolved. Still logged as an attempt, executed=false.
+        # can't even be resolved, so Cedar is never consulted. Logged, executed=false.
         return _log(conn, session, turn, tool, _as_dict(args), principal_attrs, None,
                     "not_enforced", False, None, f"error: {exc}", str(exc))
 
     if session.enforce:
-        # P4.2 replaces this with the Cedar check over _action/_resource/_context:
-        # deny -> log decision="deny", executed=false, return "Action denied by policy".
-        raise NotImplementedError("Cedar enforcement arrives in P4.2; use enforce=false in Phase 1")
+        if _authorize(conn, session.principal, action, resource, context, policies) == "deny":
+            return _log(conn, session, turn, tool, call_args, principal_attrs, resource_attrs,
+                        "deny", False, None, "denied by policy", "Action denied by policy")
+        decision = "allow"
+    else:
+        decision = "not_enforced"
 
     try:
         result = TOOLS[tool](conn, session.principal, **call_args)
     except ToolError as exc:
         return _log(conn, session, turn, tool, call_args, principal_attrs, resource_attrs,
-                    "not_enforced", False, None, f"error: {exc}", str(exc))
+                    decision, False, None, f"error: {exc}", str(exc))
     return _log(conn, session, turn, tool, call_args, principal_attrs, resource_attrs,
-                "not_enforced", True, result, _summary(tool, result), json.dumps(result))
+                decision, True, result, _summary(tool, result), json.dumps(result))
 
 
 def read_tool_log(conn: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
@@ -139,6 +157,67 @@ def _order_attrs(conn, order_id):
 def _user_attrs(conn, user_id):
     row = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
     return {"role": row["role"]} if row else None
+
+
+# --- Cedar enforcement (plan §6.6, P4.2) ------------------------------------
+
+def _authorize(conn, principal, action, resource, context, policies) -> str:
+    """Return 'allow' or 'deny' for one tool call under the loaded policy set."""
+    if not (policies or "").strip():
+        return "deny"  # no policy set loaded -> default deny (D4)
+    rtype, rid = _parse_uid(resource)
+    entities = _build_entities(conn, principal, rtype, rid)
+    request = {
+        "principal": f'User::"{principal}"',
+        "action": f'Action::"{action}"',
+        "resource": resource,
+        "context": context or {},
+    }
+    result = cedarpy.is_authorized(request, policies, entities, schema=_SCHEMA)
+    # A missing entity (e.g. an order that doesn't exist) evaluates with an error
+    # and must not be treated as allow -- any error counts as deny (§6.6).
+    allow = str(result.decision).endswith("Allow") and not result.diagnostics.errors
+    return "allow" if allow else "deny"
+
+
+def _parse_uid(uid: str) -> tuple[str, str]:
+    match = _UID_RE.match(uid)
+    if not match:
+        raise ValueError(f"not a Cedar uid: {uid!r}")
+    return match.group(1), match.group(2)
+
+
+def _uref(user_id: str) -> dict[str, Any]:
+    return {"__entity": {"type": "User", "id": user_id}}
+
+
+def _build_entities(conn, principal, rtype, rid) -> list[dict[str, Any]]:
+    """Build the Cedar entities this request touches, from the DB (§6.6 step 2)."""
+    entities: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def add_user(uid: str) -> None:
+        if ("User", uid) in entities:
+            return
+        row = conn.execute("SELECT role FROM users WHERE id = ?", (uid,)).fetchone()
+        if row is not None:
+            entities[("User", uid)] = {"uid": {"type": "User", "id": uid}, "attrs": {"role": row["role"]}, "parents": []}
+
+    add_user(principal)
+    if rtype == "Order":
+        row = conn.execute("SELECT owner, total_cents FROM orders WHERE id = ?", (rid,)).fetchone()
+        if row is not None:
+            add_user(row["owner"])
+            entities[("Order", rid)] = {
+                "uid": {"type": "Order", "id": rid},
+                "attrs": {"owner": _uref(row["owner"]), "total": row["total_cents"]},
+                "parents": [],
+            }
+    elif rtype == "Inbox":
+        add_user(rid)  # the inbox id is its owner
+        entities[("Inbox", rid)] = {"uid": {"type": "Inbox", "id": rid}, "attrs": {"owner": _uref(rid)}, "parents": []}
+    elif rtype == "User":
+        add_user(rid)
+    return list(entities.values())
 
 
 def _summary(tool, result):

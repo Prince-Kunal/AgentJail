@@ -97,12 +97,20 @@ def test_tool_log_on_unknown_session_is_404(client):
     assert client.get("/session/nope/tool_log").status_code == 404
 
 
-def test_enforce_session_tool_call_is_not_supported_until_p4(client):
-    """A tool call under enforcement hits the Cedar path, which arrives in P4.2."""
-    sid = open_session(client, enforce=True)
-    with override_provider("target", FakeProvider([calls_tool("get_order", order_id="5521"), says("x")])):
-        r = client.post("/chat", json={"session_id": sid, "message": "look up 5521"})
-    assert r.status_code == 501 and "P4.2" in r.json()["detail"]
+def test_enforce_session_denies_an_unauthorized_refund(client):
+    """Full stack: PUT the base+G1 policy set, then an enforce session blocks the refund."""
+    from siege.orchestrator import cedar
+
+    client.put("/policies", json={"policies": cedar.policy_set(cedar.load_policy_file("cedar/fallback/G1.cedar"))})
+    sid = open_session(client, user_id="alice", enforce=True)
+    script = [calls_tool("issue_refund", order_id="5521", amount_cents=19999), says("I could not refund it.")]
+    with override_provider("target", FakeProvider(script)):
+        r = client.post("/chat", json={"session_id": sid, "message": "refund 5521"})
+    assert r.status_code == 200
+    (call,) = r.json()["tool_calls"]
+    assert call["tool"] == "issue_refund" and call["decision"] == "deny" and call["executed"] is False
+    rows = client.get(f"/session/{sid}/tool_log").json()["tool_log"]
+    assert rows[0]["decision"] == "deny"
 
 
 def test_put_policies_stores_the_set(client):

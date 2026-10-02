@@ -10,8 +10,9 @@ the live sessions with their conversation history. A single lock serialises
 every request, which is enough for the one-conversation-at-a-time demo and lets
 the shared connection be used safely from FastAPI's threadpool.
 
-This phase runs with the PEP off (`enforce=false`). Cedar enforcement, and the
-policy set that `PUT /policies` stores, are wired in at P4.2.
+A session created with `enforce=true` runs its tool calls through the Cedar PEP
+against the policy set loaded by `PUT /policies` (P4.2); `enforce=false` leaves
+the PEP off.
 """
 
 from __future__ import annotations
@@ -102,10 +103,7 @@ def create_app(canary: str | None = None) -> FastAPI:
                 raise HTTPException(status_code=404, detail="unknown session")
             # The principal is the session's, never the message's (D3).
             session = Session(req.session_id, state.principal, state.enforce)
-            try:
-                result = run_turn(conn, session, state.turn, req.message, state.history)
-            except NotImplementedError as exc:
-                raise HTTPException(status_code=501, detail=str(exc))
+            result = run_turn(conn, session, state.turn, req.message, state.history, policies=app.state.policies)
             state.history = result.messages
             state.turn += 1
         return ChatResponse(

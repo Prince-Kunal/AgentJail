@@ -356,6 +356,8 @@ Wrap the tool dispatch. Before any tool runs:
 4. On **deny**, the tool does not run. Return `"Action denied by policy"` to the agent and log `decision=deny, executed=false`.
 5. If `enforce=false`, skip Cedar and log `decision=not_enforced`.
 
+The policy set reaches the PEP from `app.state.policies` (set by `PUT /policies`), threaded through `run_turn` into `dispatch`. Two fail-safe rules (P4.2): **any Cedar evaluation error counts as a deny** — a missing entity (e.g. an order that doesn't exist, or an un-normalised ID) evaluates to `Allow` with an error in `cedarpy`, which must not be trusted — and an **empty policy set denies everything** (no `permit` loaded ⇒ default-deny, D4). The PEP reads only the shared schema file, never orchestrator code.
+
 ### 6.7 Rerun (the money shot)
 
 After all policies exist, load `base.cedar` plus all fixes into the target and run the following with `enforce=true`:

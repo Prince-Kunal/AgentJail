@@ -124,8 +124,49 @@ def test_log_is_scoped_per_session(conn):
     assert read_tool_log(conn, "s2")[0]["principal"] == "bob"
 
 
-def test_enforce_true_is_not_supported_until_p4(conn):
+def _policies(*names):
+    """base.cedar plus the named fallback policies, as a single policy set."""
+    from siege.orchestrator import cedar
+
+    return cedar.policy_set(*(cedar.load_policy_file(f"cedar/fallback/{n}.cedar") for n in names))
+
+
+def test_enforce_denies_unauthorized_refund(conn):
     enforced = Session("s1", "alice", enforce=True)
-    with pytest.raises(NotImplementedError, match="P4.2"):
-        dispatch(conn, enforced, 0, "get_order", {"order_id": "5518"})
-    assert read_tool_log(conn, "s1") == []  # nothing logged: no half-done enforcement
+    result = dispatch(conn, enforced, 0, "issue_refund", {"order_id": "5521", "amount_cents": 19999}, _policies("G1"))
+    assert not result.executed and result.decision == "deny"
+    assert result.content == "Action denied by policy"
+    assert conn.execute("SELECT COUNT(*) FROM refunds").fetchone()[0] == 0
+    assert only_row(conn)["decision"] == "deny"
+
+
+def test_enforce_allows_the_owners_own_refund(conn):
+    enforced = Session("s1", "bob", enforce=True)
+    result = dispatch(conn, enforced, 0, "issue_refund", {"order_id": "5521", "amount_cents": 19999}, _policies("G1"))
+    assert result.executed and result.decision == "allow"
+    assert conn.execute("SELECT COUNT(*) FROM refunds").fetchone()[0] == 1
+
+
+def test_enforce_still_allows_reads_under_the_refund_policy(conn):
+    enforced = Session("s1", "alice", enforce=True)
+    result = dispatch(conn, enforced, 0, "get_order", {"order_id": "5521"}, _policies("G1"))
+    assert result.executed and result.decision == "allow"  # G1 only forbids refunds
+
+
+def test_enforce_denies_notes_for_non_staff_but_allows_staff(conn):
+    alice = dispatch(conn, Session("s1", "alice", enforce=True), 0, "get_customer_notes", {"customer_id": "bob"}, _policies("G2"))
+    assert not alice.executed and alice.decision == "deny"
+    carol = dispatch(conn, Session("s2", "carol", enforce=True), 0, "get_customer_notes", {"customer_id": "bob"}, _policies("G2"))
+    assert carol.executed and carol.decision == "allow"
+
+
+def test_enforce_with_no_policies_denies_everything(conn):
+    enforced = Session("s1", "bob", enforce=True)  # even bob's own order
+    result = dispatch(conn, enforced, 0, "issue_refund", {"order_id": "5521", "amount_cents": 19999}, policies="")
+    assert not result.executed and result.decision == "deny"  # default-deny (D4)
+
+
+def test_enforce_denies_a_nonexistent_order(conn):
+    enforced = Session("s1", "bob", enforce=True)
+    result = dispatch(conn, enforced, 0, "issue_refund", {"order_id": "9999", "amount_cents": 100}, _policies("G1"))
+    assert not result.executed and result.decision == "deny"  # missing entity -> eval error -> deny
