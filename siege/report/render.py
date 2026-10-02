@@ -175,12 +175,27 @@ def _after_html(replay: dict | None) -> str:
 def _findings_html(run, findings, policies_by_finding, reruns_by_finding, goals) -> str:
     if not findings:
         return '<div class="finding"><div class="muted">No breaches were found in this run.</div></div>'
+    # Goals that share a fallback share their fix: one Cedar policy covers both the
+    # direct attack and the indirect-injection path (§3.4, e.g. G1 and G3).
+    fallback_group: dict[str, list[str]] = {}
+    for gid, g in goals.items():
+        fallback_group.setdefault(g.fallback, []).append(gid)
+    finding_goal_ids = {f["goal_id"] for f in findings}
+
     cards = []
     for f in findings:
         goal = goals.get(f["goal_id"])
         policy = _display_policy(policies_by_finding[f["id"]])
         replay = _latest_replay(reruns_by_finding[f["id"]])
         desc = (goal.description.strip() if goal else "")
+        shared = sorted(
+            x for x in fallback_group.get(goal.fallback, []) if goal and x != f["goal_id"] and x in finding_goal_ids
+        ) if goal else []
+        shared_note = (
+            f'<div class="shared">Same Cedar policy as {_esc(", ".join(shared))} — '
+            f'one authorization rule covers both the direct and the indirect-injection path (§3.4).</div>'
+            if shared else ""
+        )
         top = (f'<div class="top"><h3>{_esc(f["goal_id"])} '
                f'<span class="muted" style="font-weight:400">· {_esc(f["winning_strategy"])}</span></h3>'
                f'<span class="pill sev">{_esc(f["severity"])}</span></div>')
@@ -193,7 +208,7 @@ def _findings_html(run, findings, policies_by_finding, reruns_by_finding, goals)
               f'{_after_html(replay)}</div></div>')
         cards.append(f'<div class="finding">{top}'
                      + (f'<div class="desc">{_esc(desc)}</div>' if desc else "")
-                     + meta + ba + _policy_html(policy, goal) + "</div>")
+                     + meta + ba + shared_note + _policy_html(policy, goal) + "</div>")
     return "".join(cards)
 
 

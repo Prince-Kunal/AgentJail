@@ -168,6 +168,15 @@ def test_facts_from_finding_reads_the_evidence_row(g1):
     assert facts["principal"] == "alice" and facts["resource_attrs"]["owner"] == "bob"
 
 
+def test_generate_accepts_a_valid_g2_policy():
+    # G2 is a different goal (notes staff-only); the same pipeline must handle it.
+    g2 = load_goals()["G2"]
+    valid_g2 = 'forbid (principal, action == Action::"readNotes", resource) unless { principal.role == "staff" };'
+    with override_provider("cedar", FakeProvider([cand(valid_g2)])):
+        result = cedar_gen.generate_policy(g2, models=("m1",))
+    assert result.source == "generated" and result.valid and result.model == "m1"
+
+
 def test_facts_from_finding_falls_back_to_the_predicate_tool(g1):
     # a canary-only G2 finding has no tool_call row; fall back to the predicate's tool
     from siege.orchestrator.goals import load_goals as _lg

@@ -105,3 +105,47 @@ def test_write_report_writes_the_file(store, tmp_path):
     assert path.exists() and path.name == "report.html"
     text = path.read_text(encoding="utf-8")
     assert text.startswith("<!doctype html>") and "Siege" in text
+
+
+# --- Phase 6: more goals in one report --------------------------------------
+
+
+def _seed_blocked_finding(store, run, goal_id, tool, policy_rel, resource_attrs):
+    from siege.orchestrator import cedar
+
+    store.record_attempt(run.id, goal_id, 0, strategy="s", message="m", reply="r", status="sent", breach=True)
+    fid = store.record_finding(
+        run.id, goal_id, turns_to_breach=1, winning_strategy="s",
+        evidence_tool_call={"kind": "tool_call", "tool_call": {
+            "tool": tool, "principal": "alice", "principal_attrs": {"role": "customer"},
+            "resource_attrs": resource_attrs, "executed": True, "decision": "not_enforced"}},
+        severity="critical")
+    store.record_policy(fid, cedar_text=cedar.load_policy_file(policy_rel), rationale="r",
+                        source="fallback", model=None, valid=True)
+    store.record_rerun(fid, mode="replay", outcome="BLOCKED", tries=1, evidence={"note": "denied"})
+    return fid
+
+
+def test_report_covers_all_three_goals_and_notes_the_shared_fix(store):
+    run = store.create_run({"goals": ["G1", "G2", "G3"], "attacker_user": "alice"})
+    _seed_blocked_finding(store, run, "G1", "issue_refund", "cedar/fallback/G1.cedar", {"owner": "bob", "total": 19999})
+    _seed_blocked_finding(store, run, "G2", "get_customer_notes", "cedar/fallback/G2.cedar", {"role": "customer"})
+    _seed_blocked_finding(store, run, "G3", "issue_refund", "cedar/fallback/G1.cedar", {"owner": "bob", "total": 19999})
+    store.record_happy_path(run.id, ok=True, steps=[])
+
+    html = render_run(store, run.id)
+    for gid in ("G1", "G2", "G3"):
+        assert gid in html
+    assert "3/3" in html  # all three breaches blocked on rerun
+    # G1 and G3 share one policy (§3.4); the note appears on both cards.
+    assert "Same Cedar policy as G1" in html  # on the G3 card: the G1 policy blocks G3 too
+    assert "Same Cedar policy as G3" in html  # on the G1 card
+    assert html.count("Same Cedar policy as") == 2
+    assert "✗" not in html  # every decision test still passes
+
+
+def test_report_no_shared_note_when_only_one_of_the_pair_breached(store):
+    run = store.create_run({"goals": ["G3"], "attacker_user": "alice"})
+    _seed_blocked_finding(store, run, "G3", "issue_refund", "cedar/fallback/G1.cedar", {"owner": "bob", "total": 19999})
+    html = render_run(store, run.id)
+    assert "Same Cedar policy as" not in html  # G1 didn't breach in this run, so nothing to point to
