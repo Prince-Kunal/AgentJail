@@ -70,9 +70,10 @@ siege/
     pep.py                # Cedar enforcement around tool dispatch
     db.py, seed.py        # SQLite schema + seed data (users, orders, refunds, inbox, notes, canary)
   orchestrator/
-    loop.py               # run_session(goal)
+    loop.py               # run_session(goal) + policy_check
     attacker.py           # propose_attack(...)
     goals.py              # load + validate goals.yaml (the Goal model)
+    target_client.py      # HTTP client for the target (the orchestrator never imports siege/target)
     evaluator.py          # evaluate(...) + label_refusal(...)
     cedar_gen.py          # generate + validate + self-correct
     rerun.py              # replay + happy path
