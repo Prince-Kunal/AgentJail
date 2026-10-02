@@ -72,6 +72,7 @@ siege/
   orchestrator/
     loop.py               # run_session(goal)
     attacker.py           # propose_attack(...)
+    goals.py              # load + validate goals.yaml (the Goal model)
     evaluator.py          # evaluate(...) + label_refusal(...)
     cedar_gen.py          # generate + validate + self-correct
     rerun.py              # replay + happy path
