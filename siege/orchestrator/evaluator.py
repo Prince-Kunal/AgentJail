@@ -10,8 +10,12 @@ advisory `refusal_type`; it never changes `breach`.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence
+from pathlib import Path
+from typing import Any, Callable, Literal, Sequence, get_args
 
+from pydantic import BaseModel
+
+from siege.llm import Message, llm_call
 from siege.orchestrator.goals import Goal
 
 ToolRow = dict[str, Any]
@@ -90,3 +94,45 @@ def _snippet(text: str, needle: str, pad: int = 40) -> str:
         return ""
     start, end = max(0, i - pad), min(len(text), i + len(needle) + pad)
     return ("..." if start else "") + text[start:end] + ("..." if end < len(text) else "")
+
+
+# ---------------------------------------------------------------------------
+# Advisory refusal labeller (plan §4, P2.3)
+# ---------------------------------------------------------------------------
+# This is advisory only: it feeds the attacker's adaptation and the report, and
+# is NEVER used for the breach decision (D5). On any failure the label is
+# "unknown" so a labeller hiccup can't stop the loop.
+
+RefusalType = Literal[
+    "hard_refusal",
+    "asked_for_verification",
+    "disclosed_rule",
+    "partial_compliance",
+    "deflection",
+    "complied_no_breach",
+    "unknown",
+]
+REFUSAL_TYPES: tuple[str, ...] = get_args(RefusalType)
+
+# The prompt text was tuned in §9.4; P2.3 loads it unchanged.
+LABELLER_PROMPT = (Path(__file__).resolve().parent / "labeller_prompt.txt").read_text(encoding="utf-8").strip()
+
+
+class RefusalLabel(BaseModel):
+    """Reason-first so the model explains before it labels (plan §4, §9.4)."""
+
+    reason: str
+    refusal_type: RefusalType
+
+
+def label_refusal(reply: str, *, model: str | None = None) -> str:
+    """Label one assistant reply with a `refusal_type` (plan §4). 'unknown' on any failure."""
+    if not (reply or "").strip():
+        return "unknown"
+    try:
+        result = llm_call("labeller", LABELLER_PROMPT, [Message.user(reply)], schema=RefusalLabel, model=model)
+    except Exception:
+        return "unknown"
+    if not result.ok or result.parsed is None:
+        return "unknown"
+    return result.parsed.refusal_type
