@@ -9,8 +9,14 @@ needs (plan §3.5).
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterator
+from urllib.parse import urlparse
 
 import httpx
 
@@ -65,3 +71,54 @@ class TargetClient:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+
+@contextmanager
+def launched_target(
+    canary: str,
+    *,
+    target_url: str | None = None,
+    model: str | None = None,
+    ready_timeout: float = 90,
+) -> Iterator[TargetClient]:
+    """Run the target as a uvicorn subprocess seeded with `canary`, yielding a client.
+
+    This is how `siege run` stays self-contained: the orchestrator and the target
+    share the run canary because the orchestrator sets SIEGE_CANARY for the child.
+    """
+    url = (target_url or get_settings().target_url).rstrip("/")
+    parsed = urlparse(url)
+    env = {**os.environ, "SIEGE_CANARY": canary}
+    if model:
+        env["SIEGE_TARGET_MODEL"] = model
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "siege.target.app:app",
+         "--host", parsed.hostname or "127.0.0.1", "--port", str(parsed.port or 8100),
+         "--log-level", "warning"],
+        env=env,
+    )
+    client = TargetClient(base_url=url)
+    try:
+        _wait_ready(client, proc, ready_timeout)
+        yield client
+    finally:
+        client.close()
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def _wait_ready(client: TargetClient, proc: subprocess.Popen, timeout: float) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(f"target exited early (code {proc.returncode}) before becoming ready")
+        try:
+            if client._client.get("/openapi.json", timeout=2).status_code == 200:
+                return
+        except httpx.HTTPError:
+            pass
+        time.sleep(0.5)
+    raise TimeoutError(f"target at {client.base_url} was not ready within {timeout}s")

@@ -17,10 +17,10 @@ keys, no accounts, no cloud costs.
 
 ## Status
 
-Phases 0–1 are complete: settings and the LLM layer (local Ollama + a scripted
-fake for tests), plus the vulnerable target agent (ShopBot) — its tools, the
-Cedar enforcement point with a tool log, the tool-calling loop, and the FastAPI
-service. The attack loop, Cedar generation and the report land in Phases 2–5
+Phases 0–3 are complete: settings and the LLM layer, the vulnerable target agent
+(ShopBot), the deterministic evaluator and SQLite store, and the adaptive
+PAIR-style attack loop with a CLI. `siege run` now drives an automated multi-turn
+attack end to end. Cedar generation/enforcement and the report land in Phases 4–5
 (plan §9). This README is updated whenever a phase changes how Siege is run.
 
 ## Requirements
@@ -69,10 +69,26 @@ python -m siege.scripts.chat --user alice -m "refund order 5521"
 ```
 
 Each tool call the agent makes is printed before its reply; `/log` dumps the
-tool log, `/quit` exits. The capable `qwen2.5:14b` often refuses a direct
-unauthorized refund — that's what Phase 3's adaptive attacker is for. To see the
-vulnerability by hand, point the target at the weaker model:
-`SIEGE_TARGET_MODEL=qwen2.5:7b uvicorn siege.target.app:app --port 8100`.
+tool log, `/quit` exits.
+
+## Run an automated attack
+
+`siege run` launches the target for you, drives the adaptive attacker against it,
+and stores every turn:
+
+```bash
+# Attack G1 (direct unauthorized refund), printing each turn live
+siege run --goal G1
+
+# The capable 14b resists; point the launched target at the weaker model to
+# see a breach quickly (the attacker still runs on the default model):
+siege run --goal G1 --target-model qwen2.5:7b
+
+siege show <run_id>      # replay a stored run: attempts, labels, findings
+```
+
+`siege run` with no `--goal` attacks every goal in `goals.yaml`. Use `--no-launch`
+to attack a target you started yourself.
 
 No Python 3.12? On macOS: `brew install python@3.12`. On Linux, use your
 distribution's package or [python.org](https://www.python.org/downloads/).
