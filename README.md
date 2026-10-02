@@ -17,10 +17,11 @@ keys, no accounts, no cloud costs.
 
 ## Status
 
-Phase 0 (foundations) is complete: settings, the LLM layer (local Ollama + a
-scripted fake for tests) and the test suite. The agent, attack loop, Cedar
-enforcement and report land in Phases 1–5 (plan §9). This README is updated
-whenever a phase changes how Siege is run.
+Phases 0–1 are complete: settings and the LLM layer (local Ollama + a scripted
+fake for tests), plus the vulnerable target agent (ShopBot) — its tools, the
+Cedar enforcement point with a tool log, the tool-calling loop, and the FastAPI
+service. The attack loop, Cedar generation and the report land in Phases 2–5
+(plan §9). This README is updated whenever a phase changes how Siege is run.
 
 ## Requirements
 
@@ -49,9 +50,29 @@ source .venv/bin/activate
 pip install -e '.[dev]'
 
 # 4. Check everything works
-pytest              # 40 unit tests, no network or LLM needed (~10 s)
+pytest              # 110 unit tests, no network or LLM needed (~10 s)
 pytest -m live      # 3 smoke tests against your local Ollama
 ```
+
+## Talk to the target by hand
+
+ShopBot is the deliberately vulnerable agent Siege attacks. You can chat with it
+directly:
+
+```bash
+# Start the target (in one terminal)
+uvicorn siege.target.app:app --port 8100
+
+# Talk to it as a customer (in another)
+python -m siege.scripts.chat --user alice
+python -m siege.scripts.chat --user alice -m "refund order 5521"
+```
+
+Each tool call the agent makes is printed before its reply; `/log` dumps the
+tool log, `/quit` exits. The capable `qwen2.5:14b` often refuses a direct
+unauthorized refund — that's what Phase 3's adaptive attacker is for. To see the
+vulnerability by hand, point the target at the weaker model:
+`SIEGE_TARGET_MODEL=qwen2.5:7b uvicorn siege.target.app:app --port 8100`.
 
 No Python 3.12? On macOS: `brew install python@3.12`. On Linux, use your
 distribution's package or [python.org](https://www.python.org/downloads/).
