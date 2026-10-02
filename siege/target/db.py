@@ -75,11 +75,16 @@ CREATE TABLE IF NOT EXISTS tool_log (
 TABLES = ("users", "orders", "refunds", "inbox", "notes")
 
 
-def connect(path: str | Path = ":memory:") -> sqlite3.Connection:
-    """Open the target DB (in memory by default) and create any missing tables."""
+def connect(path: str | Path = ":memory:", check_same_thread: bool = True) -> sqlite3.Connection:
+    """Open the target DB (in memory by default) and create any missing tables.
+
+    Pass `check_same_thread=False` to share one connection across threads (the
+    FastAPI service does, serialising access with its own lock); a single
+    in-memory connection is the whole DB, so it can't be reopened per request.
+    """
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
