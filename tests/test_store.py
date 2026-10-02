@@ -83,6 +83,16 @@ def test_foreign_keys_are_enforced(store):
         store.record_attempt(999, "G1", 0, status="sent")
 
 
+def test_happy_path_roundtrips_and_returns_the_latest(store):
+    run = store.create_run(CONFIG)
+    assert store.happy_path(run.id) is None  # nothing recorded yet
+    steps = [{"name": "refund her own order", "tool": "issue_refund", "decision": "allow", "executed": True}]
+    store.record_happy_path(run.id, ok=False, steps=steps)
+    store.record_happy_path(run.id, ok=True, steps=steps)  # a later rerun
+    latest = store.happy_path(run.id)
+    assert latest["ok"] is True and latest["steps"] == steps  # the most recent wins
+
+
 def test_runs_are_isolated(store):
     a = store.create_run(CONFIG)
     b = store.create_run(CONFIG)

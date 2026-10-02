@@ -193,6 +193,10 @@ def test_rerun_blocks_g1_and_passes_the_happy_path(goals, store):
     assert rr["outcome"] == "BLOCKED" and rr["mode"] == "replay"
     assert rr["evidence"]["tool_call"]["decision"] == "deny"
 
+    happy = store.happy_path(run.id)  # the rerun persists the happy path for the report (P5)
+    assert happy is not None and happy["ok"] is True
+    assert [s["tool"] for s in happy["steps"]] == ["get_order", "issue_refund", "read_inbox"]
+
 
 def test_rerun_flags_a_policy_that_still_breaches(goals, store):
     run, fid = make_run_with_g1_finding(store)

@@ -67,6 +67,13 @@ CREATE TABLE IF NOT EXISTS reruns (
     tries      INTEGER,
     evidence   TEXT                       -- JSON
 );
+
+CREATE TABLE IF NOT EXISTS happy_path (
+    id         INTEGER PRIMARY KEY,
+    run_id     INTEGER NOT NULL REFERENCES runs (id),
+    ok         INTEGER NOT NULL,          -- all three legitimate actions allowed and executed
+    steps_json TEXT                       -- JSON: the steps and their decisions (§6.7)
+);
 """
 
 
@@ -192,6 +199,14 @@ class Store:
             )
         return cur.lastrowid
 
+    def record_happy_path(self, run_id: int, *, ok: bool, steps: Any = None) -> int:
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO happy_path (run_id, ok, steps_json) VALUES (?, ?, ?)",
+                (run_id, int(ok), json.dumps(steps)),
+            )
+        return cur.lastrowid
+
     # --- reads --------------------------------------------------------------
 
     def get_run(self, run_id: int) -> Run | None:
@@ -223,3 +238,12 @@ class Store:
             "SELECT * FROM reruns WHERE finding_id = ? ORDER BY id", (finding_id,)
         ).fetchall()
         return [{**dict(r), "evidence": _loads(r["evidence"])} for r in rows]
+
+    def happy_path(self, run_id: int) -> dict[str, Any] | None:
+        """The latest happy-path result for a run, or None if it was never recorded."""
+        row = self.conn.execute(
+            "SELECT * FROM happy_path WHERE run_id = ? ORDER BY id DESC LIMIT 1", (run_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return {**dict(row), "ok": bool(row["ok"]), "steps": _loads(row["steps_json"])}

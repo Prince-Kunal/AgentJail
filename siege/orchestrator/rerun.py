@@ -206,4 +206,8 @@ def rerun(
             on_replay(replay)
 
     result.happy_path = run_happy_path(target, user=happy_user)
+    store.record_happy_path(
+        run.id, ok=result.happy_path.ok,
+        steps=[dataclasses.asdict(s) for s in result.happy_path.steps],
+    )
     return result

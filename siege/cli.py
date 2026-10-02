@@ -1,10 +1,10 @@
-"""The `siege` command line (plan §9, P3.4, P4.6).
+"""The `siege` command line (plan §9, P3.4, P4.6, P5.2).
 
 `siege run` attacks the goals and stores the result; `siege show` prints a stored
 run; `siege fix <run_id>` generates a Cedar fix per finding (§6.4-6.5); `siege
 rerun <run_id>` replays each finding with the PEP on and runs the happy path
-(§6.7); and `siege demo` does run + fix + rerun in one go against a single target.
-`report` arrives in Phase 5.
+(§6.7); `siege report <run_id>` writes the static HTML report (§8); and `siege
+demo` does run + fix + rerun + report in one go against a single target.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from siege.orchestrator.goals import load_goals
 from siege.orchestrator.loop import SessionResult, TurnEvent, run_session
 from siege.orchestrator.store import Store
 from siege.orchestrator.target_client import TargetClient, launched_target
+from siege.report.render import write_report
 
 
 def _trunc(text: str | None, n: int = 160) -> str:
@@ -243,15 +244,30 @@ def cmd_demo(args: argparse.Namespace) -> int:
             print("\n== RERUN (PEP on) ==")
             rr = rerun.rerun(run, store, target, on_replay=print_replay)
             print("\n" + rr.summary())
+            report_path = write_report(store, run.id)
             breached = sum(r.breached for r in results)
             c = rr.outcomes()
             print(f"\ndemo run {run.id}: {breached} breach(es) → {c['BLOCKED']} blocked, "
                   f"{c['NOT_REPRODUCED']} not reproduced, {c['STILL_BREACHED']} still breached; "
-                  f"happy path {'OK' if rr.happy_path and rr.happy_path.ok else 'FAILED'}. "
-                  f"See `siege show {run.id}`.")
+                  f"happy path {'OK' if rr.happy_path and rr.happy_path.ok else 'FAILED'}.")
+            print(f"report: {report_path}")
             return 0 if rr.ok else 1
     finally:
         store.close()
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    store = Store()
+    try:
+        run = store.get_run(args.run_id)
+        if run is None:
+            print(f"no run {args.run_id}", file=sys.stderr)
+            return 1
+        path = write_report(store, run.id)
+    finally:
+        store.close()
+    print(f"wrote {path}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -279,7 +295,11 @@ def build_parser() -> argparse.ArgumentParser:
                          help="use an already-running target instead of launching one")
     rerun_p.set_defaults(func=cmd_rerun)
 
-    demo = sub.add_parser("demo", help="run, fix and rerun in one go against a single target")
+    report_p = sub.add_parser("report", help="write runs/<run_id>/report.html from a stored run")
+    report_p.add_argument("run_id", type=int)
+    report_p.set_defaults(func=cmd_report)
+
+    demo = sub.add_parser("demo", help="run, fix, rerun and report in one go against a single target")
     demo.add_argument("--goal", action="append", help="goal id (repeatable); default: all goals")
     demo.add_argument("--max-turns", type=int, default=None, help="override MAX_TURNS")
     demo.add_argument("--target-model", default=None, help="model for the launched target (e.g. qwen2.5:7b)")
