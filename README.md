@@ -30,7 +30,7 @@ whenever a phase changes how Siege is run.
 | Python | 3.12+ |
 | Ollama | any recent version (developed on 0.32.5) |
 | Disk | ~14 GB for the two models |
-| RAM | ~8 GB free for `qwen2.5:7b`; ~10 GB for `qwen2.5:14b` (used only for Cedar generation, plan §6.5) |
+| RAM | ~10 GB free for `qwen2.5:14b`, the primary model (only one model is loaded at a time) |
 
 ## Quickstart
 
@@ -40,8 +40,8 @@ git clone https://github.com/Prince-Kunal/AgentJail.git
 cd AgentJail
 
 # 2. Install Ollama (https://ollama.com/download), start it, and pull the models
-ollama pull qwen2.5:7b      # attacker, target agent, labeller
-ollama pull qwen2.5:14b     # second model in the Cedar generator cascade
+ollama pull qwen2.5:14b     # primary model: attacker, target agent, labeller, Cedar generator
+ollama pull qwen2.5:7b      # fallback in the Cedar generator cascade (plan §6.5)
 
 # 3. Python environment
 python3.12 -m venv .venv
@@ -68,9 +68,9 @@ own `SIEGE_<ROLE>_*` settings, and the Cedar generator tries the models in
 
 | Symptom | Fix |
 |---|---|
-| `pytest -m live` reports tests **skipped** | Ollama isn't running, or the model isn't pulled. Start Ollama and run `ollama pull qwen2.5:7b`. |
+| `pytest -m live` reports tests **skipped** | Ollama isn't running, or the model isn't pulled. Start Ollama and run `ollama pull qwen2.5:14b`. |
 | `ModuleNotFoundError: No module named 'siege'` when running a script | macOS can mark the editable-install `.pth` file hidden, and Python 3.12 then skips it. Run from the repo root or prefix with `PYTHONPATH=.` (`pytest` already handles this). |
-| The first LLM call is slow | Ollama is loading the model into memory; later calls are ~2 s on an Apple M4. |
+| The first LLM call is slow | Ollama is loading the model into memory; later calls are ~3–4 s on an Apple M4. |
 
 ## Repository layout
 

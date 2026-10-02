@@ -1,6 +1,6 @@
 """Live smoke tests against local Ollama. Run with `pytest -m live`.
 
-Needs Ollama running with the default model pulled (`ollama pull qwen2.5:7b`).
+Needs Ollama running with the default model pulled (`ollama pull qwen2.5:14b`).
 """
 
 import json

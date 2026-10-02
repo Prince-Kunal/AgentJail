@@ -17,12 +17,13 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")
 ROLES = ("attacker", "target", "labeller", "cedar")
 
 # Defaults from plan §2 and §9.4: every role runs on local Ollama with one
-# shared model, so anyone can clone and run Siege with no paid API key.
+# shared primary model, so anyone can clone and run Siege with no paid API key.
 # Cloud providers are opt-in via .env.
-DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
+DEFAULT_OLLAMA_MODEL = "qwen2.5:14b"
 # Cedar generator cascade (plan §6.5): each model is tried in order until a
-# policy passes validation and the goal's decision tests.
-DEFAULT_CEDAR_MODELS = (DEFAULT_OLLAMA_MODEL, "qwen2.5:14b")
+# policy passes validation and the goal's decision tests. The 7b is the
+# fallback: it writes policies the 14b gets wrong (G2 in testing).
+DEFAULT_CEDAR_MODELS = (DEFAULT_OLLAMA_MODEL, "qwen2.5:7b")
 
 _ROLE_DEFAULTS: dict[str, dict[str, str]] = {
     "attacker": {"provider": "ollama", "model": DEFAULT_OLLAMA_MODEL},

@@ -40,7 +40,7 @@ def test_plain_text_uses_configured_model():
     fake = FakeProvider(["hello"])
     with override_provider("target", fake):
         r = ask()
-    assert r.ok and r.text == "hello" and r.model == "qwen2.5:7b"
+    assert r.ok and r.text == "hello" and r.model == "qwen2.5:14b"
     assert r.latency_s >= 0
 
 
@@ -57,8 +57,8 @@ def test_requests_are_recorded():
 def test_model_override_reaches_request_and_result():
     fake = FakeProvider(["x"])
     with override_provider("cedar", fake):
-        r = ask("cedar", model="qwen2.5:14b")
-    assert fake.requests[0].model == "qwen2.5:14b" and r.model == "qwen2.5:14b"
+        r = ask("cedar", model="qwen2.5:7b")
+    assert fake.requests[0].model == "qwen2.5:7b" and r.model == "qwen2.5:7b"
 
 
 def test_schema_is_validated_in_llm_call():
@@ -103,7 +103,7 @@ def test_scripted_dict_is_not_mutated():
 
 def test_scripted_llmresult_gets_model_filled_in():
     with override_provider("target", FakeProvider([LLMResult(model="", text="t")])):
-        assert ask().model == "qwen2.5:7b"
+        assert ask().model == "qwen2.5:14b"
 
 
 def test_exhausted_script_raises():

@@ -9,10 +9,10 @@ def test_defaults_run_everything_on_local_ollama():
     s = load_settings()
     for role in ROLES:
         assert s.role(role).provider == "ollama"
-    assert s.attacker.model == s.target.model == s.labeller.model == "qwen2.5:7b"
+    assert s.attacker.model == s.target.model == s.labeller.model == "qwen2.5:14b"
     assert s.target.temperature == 0.0 and s.labeller.temperature == 0.0 and s.cedar.temperature == 0.0
     assert s.attacker.temperature is None
-    assert s.cedar_models == DEFAULT_CEDAR_MODELS == ("qwen2.5:7b", "qwen2.5:14b")
+    assert s.cedar_models == DEFAULT_CEDAR_MODELS == ("qwen2.5:14b", "qwen2.5:7b")
     assert s.cedar.model == s.cedar_models[0]
     assert s.max_turns == 10 and s.attacker_user == "alice"
     assert s.ollama_host == "http://localhost:11434"
@@ -37,7 +37,7 @@ def test_none_switches_a_parameter_off(monkeypatch):
 
 def test_blank_value_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("SIEGE_TARGET_MODEL", "")
-    assert load_settings().target.model == "qwen2.5:7b"
+    assert load_settings().target.model == "qwen2.5:14b"
 
 
 @pytest.mark.parametrize("key, value", [("SIEGE_CEDAR_PROVIDER", "openrouter"), ("SIEGE_ATTACKER_EFFORT", "extreme")])
@@ -64,8 +64,8 @@ def test_load_dotenv_ignores_missing_file(tmp_path):
 @pytest.mark.parametrize(
     "env, expected",
     [
-        ({}, ("qwen2.5:7b", "qwen2.5:14b")),
-        ({"SIEGE_CEDAR_MODEL": "qwen2.5:14b"}, ("qwen2.5:14b",)),
+        ({}, ("qwen2.5:14b", "qwen2.5:7b")),
+        ({"SIEGE_CEDAR_MODEL": "qwen2.5:7b"}, ("qwen2.5:7b",)),
         ({"SIEGE_CEDAR_MODELS": " a, b ,c ", "SIEGE_CEDAR_MODEL": "ignored"}, ("a", "b", "c")),
     ],
 )
@@ -85,7 +85,7 @@ def test_cedar_cascade_rejects_empty_list(monkeypatch):
 
 def test_require_model_and_unknown_role():
     s = load_settings()
-    assert s.attacker.require_model() == "qwen2.5:7b"
+    assert s.attacker.require_model() == "qwen2.5:14b"
     with pytest.raises(ValueError, match="SIEGE_ATTACKER_MODEL"):
         RoleConfig(role="attacker", provider="ollama", model="").require_model()
     with pytest.raises(ValueError, match="unknown LLM role"):
