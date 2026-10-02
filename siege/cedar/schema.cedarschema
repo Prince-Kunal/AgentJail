@@ -1,0 +1,10 @@
+// Cedar schema for the target (plan §6.2). Hand-written once.
+// Money is Long (integer cents): Cedar has no decimals.
+entity User  { role: String };
+entity Order { owner: User, total: Long };
+entity Inbox { owner: User };
+
+action getOrder    appliesTo { principal: User, resource: Order };
+action issueRefund appliesTo { principal: User, resource: Order, context: { amount: Long } };
+action readInbox   appliesTo { principal: User, resource: Inbox };
+action readNotes   appliesTo { principal: User, resource: User };

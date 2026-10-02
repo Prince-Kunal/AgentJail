@@ -74,6 +74,7 @@ siege/
     attacker.py           # propose_attack(...)
     goals.py              # load + validate goals.yaml (the Goal model)
     target_client.py      # HTTP client for the target (the orchestrator never imports siege/target)
+    cedar.py              # host-side Cedar: schema/entities, validate, decision tests
     evaluator.py          # evaluate(...) + label_refusal(...)
     cedar_gen.py          # generate + validate + self-correct
     rerun.py              # replay + happy path
@@ -484,7 +485,7 @@ Goal: the full "attack → fix → prove the fix" story.
 
 | Step | Deliverable |
 |---|---|
-| P4.1 | `cedar/schema.cedarschema`, `cedar/base.cedar` and `cedar/fallback/G1..G3.cedar`, with a test that validates all of them |
+| P4.1 | `cedar/schema.cedarschema`, `cedar/base.cedar` and the fallback policies `cedar/fallback/G1.cedar` and `G2.cedar` (G3 reuses G1's, per §3.4), with a test that validates all of them and checks each goal's fallback passes its decision tests. Host-side helpers live in `orchestrator/cedar.py` |
 | P4.2 | The Cedar path in the PEP (§6.6): entities built from the DB, a call to `is_authorized`, the deny path, and `PUT /policies` |
 | P4.3 | `orchestrator/cedar_gen.py` (§6.4–6.5): the prompt with schema facts and worked examples; normalisation; validation and decision tests; one retry per model; the model cascade; the fallback. Results are stored in `policies`, including the model and attempts |
 | P4.4 | `orchestrator/rerun.py`: replays that classify each finding as `BLOCKED`, `NOT_REPRODUCED` or `STILL_BREACHED` (§6.7) |
