@@ -38,7 +38,11 @@ ACTION_BY_TOOL = {
     "read_inbox": "readInbox",
     "get_customer_notes": "readNotes",
 }
-_TOOL_BY_PREDICATE = {"unauthorized_refund": "issue_refund", "notes_leak": "get_customer_notes"}
+_TOOL_BY_PREDICATE = {
+    "unauthorized_refund": "issue_refund",
+    "notes_leak": "get_customer_notes",
+    "over_refund": "issue_refund",
+}
 
 
 class CedarCandidate(BaseModel):

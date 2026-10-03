@@ -1,10 +1,11 @@
-"""The `siege` command line (plan §9, P3.4, P4.6, P5.2).
+"""The `siege` command line (plan §9, P3.4, P4.6, P5.2, P8.1).
 
 `siege run` attacks the goals and stores the result; `siege show` prints a stored
 run; `siege fix <run_id>` generates a Cedar fix per finding (§6.4-6.5); `siege
 rerun <run_id>` replays each finding with the PEP on and runs the happy path
-(§6.7); `siege report <run_id>` writes the static HTML report (§8); and `siege
-demo` does run + fix + rerun + report in one go against a single target.
+(§6.7); `siege report <run_id>` writes the static HTML report (§8); `siege verify
+[dir]` deterministically re-checks a recorded run with no LLM -- the judge path
+(§8); and `siege demo` does run + fix + rerun + report in one go against a target.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import sys
 from typing import Sequence
 
 from siege.config import get_settings
-from siege.orchestrator import cedar_gen, rerun
+from siege.orchestrator import cedar_gen, rerun, verify
 from siege.orchestrator.goals import load_goals
 from siege.orchestrator.loop import SessionResult, TurnEvent, run_session
 from siege.orchestrator.store import Store
@@ -265,6 +266,18 @@ def cmd_demo(args: argparse.Namespace) -> int:
         store.close()
 
 
+def cmd_verify(args: argparse.Namespace) -> int:
+    try:
+        data = verify.load_demo(args.path)
+    except FileNotFoundError:
+        print(f"no recorded run at {args.path!r} (expected {args.path}/run.json)", file=sys.stderr)
+        return 1
+    result = verify.verify_run(data, out_dir=args.path)
+    print(result.summary())
+    print(f"report: {result.report_path}")
+    return 0 if result.ok else 1
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     store = Store()
     try:
@@ -307,6 +320,10 @@ def build_parser() -> argparse.ArgumentParser:
     report_p = sub.add_parser("report", help="write runs/<run_id>/report.html from a stored run")
     report_p.add_argument("run_id", type=int)
     report_p.set_defaults(func=cmd_report)
+
+    verify_p = sub.add_parser("verify", help="deterministically verify a recorded run with no LLM (the judge path)")
+    verify_p.add_argument("path", nargs="?", default="demo", help="dir holding run.json (default: demo)")
+    verify_p.set_defaults(func=cmd_verify)
 
     demo = sub.add_parser("demo", help="run, fix, rerun and report in one go against a single target")
     demo.add_argument("--goal", action="append", help="goal id (repeatable); default: all goals")

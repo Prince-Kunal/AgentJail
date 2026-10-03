@@ -177,6 +177,15 @@ def test_generate_accepts_a_valid_g2_policy():
     assert result.source == "generated" and result.valid and result.model == "m1"
 
 
+def test_generate_accepts_a_valid_g4_amount_cap():
+    # G4 (P8.3): the over-refund amount cap, a context-vs-resource comparison.
+    g4 = load_goals()["G4"]
+    valid_g4 = 'forbid (principal, action == Action::"issueRefund", resource) when { context.amount > resource.total };'
+    with override_provider("cedar", FakeProvider([cand(valid_g4)])):
+        result = cedar_gen.generate_policy(g4, models=("m1",))
+    assert result.source == "generated" and result.valid
+
+
 def test_facts_from_finding_falls_back_to_the_predicate_tool(g1):
     # a canary-only G2 finding has no tool_call row; fall back to the predicate's tool
     from siege.orchestrator.goals import load_goals as _lg

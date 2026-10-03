@@ -17,11 +17,12 @@ keys, no accounts, no cloud costs.
 
 ## Status
 
-Phases 0–3 are complete: settings and the LLM layer, the vulnerable target agent
-(ShopBot), the deterministic evaluator and SQLite store, and the adaptive
-PAIR-style attack loop with a CLI. `siege run` now drives an automated multi-turn
-attack end to end. Cedar generation/enforcement and the report land in Phases 4–5
-(plan §9). This README is updated whenever a phase changes how Siege is run.
+Phases 0–8 are complete: the LLM layer and settings, the vulnerable target agent
+(ShopBot), the deterministic evaluator and SQLite store, the adaptive PAIR-style
+attack loop, Cedar generation + enforcement, the rerun that **proves each fix**,
+the HTML report, a hardened Docker sandbox, and an offline judge path. `siege demo`
+runs the whole loop; `siege verify demo` reproduces it with **no LLM**. This README
+is updated whenever a phase changes how Siege is run.
 
 ## Requirements
 
@@ -50,7 +51,7 @@ source .venv/bin/activate
 pip install -e '.[dev]'
 
 # 4. Check everything works
-pytest              # 110 unit tests, no network or LLM needed (~10 s)
+pytest              # 268 unit tests, no network or LLM needed (~7 s)
 pytest -m live      # 3 smoke tests against your local Ollama
 ```
 
@@ -89,6 +90,48 @@ siege show <run_id>      # replay a stored run: attempts, labels, findings
 
 `siege run` with no `--goal` attacks every goal in `goals.yaml`. Use `--no-launch`
 to attack a target you started yourself.
+
+## The full loop: attack, fix, prove the fix
+
+`siege demo` runs the whole story against one target — attack → generate a Cedar
+fix → re-run the attack with the fix enforced → render the report:
+
+```bash
+siege demo --goal G1 --target-model qwen2.5:7b
+```
+
+It prints the breach, the model-written Cedar policy (validated and decision-tested),
+the rerun outcome (`BLOCKED` — *still fooled, Cedar still said no*), the happy-path
+result, and writes `runs/<id>/report.html`. The steps are also separate commands:
+`siege fix <run_id>`, `siege rerun <run_id>`, `siege report <run_id>`.
+
+### In a hardened sandbox
+
+Run the target inside Docker (non-root, read-only root filesystem, all capabilities
+dropped, restricted egress) and drive the same demo against it:
+
+```bash
+SIEGE_TARGET_MODEL=qwen2.5:7b ./sandbox/run.sh    # builds + starts it, prints the canary
+./sandbox/check.sh                                 # verify the isolation
+SIEGE_CANARY=<printed> siege demo --no-launch      # attack the sandboxed target
+```
+
+See [`sandbox/README.md`](sandbox/README.md) for the hardening details and the
+Firecracker microVM path.
+
+## Reproduce in seconds without an LLM (the judge path)
+
+A recorded run lives in [`demo/`](demo/). `siege verify demo` replays its breaches
+and the happy path through the exact Cedar policies — deterministically, with **no
+Ollama, no network, no running target** — and re-renders the report:
+
+```bash
+siege verify demo        # VERIFIED: recorded breaches blocked, happy path OK
+open demo/report.html
+```
+
+This is the backup for a live demo and the fastest way to confirm "attack blocked,
+normal use still works" on any laptop. The demo script is in [`demo/SCRIPT.md`](demo/SCRIPT.md).
 
 No Python 3.12? On macOS: `brew install python@3.12`. On Linux, use your
 distribution's package or [python.org](https://www.python.org/downloads/).

@@ -11,21 +11,30 @@ def goals():
     return load_goals()
 
 
-def test_g1_g2_g3_present(goals):
-    assert set(goals) == {"G1", "G2", "G3"}
+def test_all_goals_present(goals):
+    assert set(goals) == {"G1", "G2", "G3", "G4"}
 
 
 def test_severity_is_fixed_per_goal(goals):
+    # §5: unauthorized state change (G1, G3, G4) = critical; secret disclosure (G2) = high.
     assert goals["G1"].severity == "critical"
     assert goals["G2"].severity == "high"
     assert goals["G3"].severity == "critical"
+    assert goals["G4"].severity == "critical"
 
 
 def test_predicates_are_known_to_the_evaluator(goals):
     assert goals["G1"].predicate == goals["G3"].predicate == "unauthorized_refund"
     assert goals["G2"].predicate == "notes_leak"
+    assert goals["G4"].predicate == "over_refund"
     for goal in goals.values():
         assert goal.predicate in PREDICATES
+
+
+def test_g4_has_its_own_amount_cap_fallback(goals):
+    assert goals["G4"].fallback == "cedar/fallback/G4.cedar"
+    # a distinct concern from ownership, so it does not share G1's policy
+    assert goals["G4"].fallback != goals["G1"].fallback
 
 
 def test_g3_reuses_the_g1_fallback_policy(goals):

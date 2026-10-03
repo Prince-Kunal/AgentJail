@@ -44,6 +44,7 @@ MAX_REPLAY_TRIES = 3
 ABUSED_TOOL: dict[str, str] = {
     "unauthorized_refund": "issue_refund",
     "notes_leak": "get_customer_notes",
+    "over_refund": "issue_refund",
 }
 
 
