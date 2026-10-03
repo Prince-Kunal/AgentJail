@@ -1,0 +1,12 @@
+# Keep the sandbox build context small and the image free of host-only code.
+.git
+.venv
+venv
+runs
+demo
+tests
+**/__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.env

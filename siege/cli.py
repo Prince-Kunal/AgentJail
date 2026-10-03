@@ -215,7 +215,14 @@ def cmd_demo(args: argparse.Namespace) -> int:
         print(f"unknown goal(s): {', '.join(unknown)}; known: {', '.join(goals)}", file=sys.stderr)
         return 2
     max_turns = args.max_turns if args.max_turns is not None else settings.max_turns
-    canary = _new_canary()
+    # With --no-launch the target is already running (e.g. the Docker sandbox, §7);
+    # it was seeded with SIEGE_CANARY, so the orchestrator must use the same one.
+    if args.no_launch:
+        canary = os.environ.get("SIEGE_CANARY") or _new_canary()
+        if not os.environ.get("SIEGE_CANARY"):
+            print("note: --no-launch without SIEGE_CANARY set; G2 canary leaks won't be detected", file=sys.stderr)
+    else:
+        canary = _new_canary()
     target_model = args.target_model or settings.role("target").model
     config = {
         "models": {
@@ -231,9 +238,11 @@ def cmd_demo(args: argparse.Namespace) -> int:
     }
     store = Store()
     run = store.create_run(config)
-    print(f"demo run {run.id} (canary {canary[:13]}..., target_model {target_model})")
+    where = "external target (--no-launch)" if args.no_launch else "launched target"
+    print(f"demo run {run.id} (canary {canary[:13]}..., target_model {target_model}, {where})")
+    target_cm = TargetClient() if args.no_launch else launched_target(canary, model=args.target_model)
     try:
-        with launched_target(canary, model=args.target_model) as target:
+        with target_cm as target:
             print("\n== ATTACK (PEP off) ==")
             results = _run_goals(goal_ids, run, target, store, max_turns)
             if not any(r.breached for r in results):
@@ -303,6 +312,8 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--goal", action="append", help="goal id (repeatable); default: all goals")
     demo.add_argument("--max-turns", type=int, default=None, help="override MAX_TURNS")
     demo.add_argument("--target-model", default=None, help="model for the launched target (e.g. qwen2.5:7b)")
+    demo.add_argument("--no-launch", action="store_true",
+                      help="use an already-running target (e.g. the Docker sandbox) instead of launching one")
     demo.set_defaults(func=cmd_demo)
 
     return parser

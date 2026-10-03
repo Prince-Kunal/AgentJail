@@ -88,6 +88,18 @@ def test_parser_registers_fix_rerun_report_demo():
     assert parser.parse_args(["demo"]).func is cli.cmd_demo
 
 
+def test_demo_accepts_no_launch_for_the_sandbox():
+    # §7: `siege demo --no-launch` drives an already-running target (the Docker sandbox).
+    args = cli.build_parser().parse_args(["demo", "--no-launch", "--goal", "G1"])
+    assert args.func is cli.cmd_demo and args.no_launch is True and args.goal == ["G1"]
+
+
+def test_demo_rejects_unknown_goal_before_touching_a_target(db, capsys):
+    # Returns on the goal check, before any launch/connect, so it's safe without a target.
+    assert cli.main(["demo", "--no-launch", "--goal", "G9"]) == 2
+    assert "unknown goal" in capsys.readouterr().err
+
+
 def test_report_unknown_run_is_error(db, capsys):
     assert cli.main(["report", "999"]) == 1
     assert "no run 999" in capsys.readouterr().err
